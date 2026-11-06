@@ -646,13 +646,8 @@ private:
             return;
         {
             std::lock_guard lock(state->mutex);
-            for (OutputLine& line : fresh) {
-                line.seq = state->nextSeq++;
-                state->lines.push_back(std::move(line));
-                if (state->lines.size() > kMaxKeptLines)
-                    state->lines.pop_front();
-            }
-            // The log keeps everything up to the cap.
+            // Log the lines first: the second loop moves them into the ring
+            // buffer, which leaves the texts empty.
             for (const OutputLine& line : fresh) {
                 std::string row = line.text + "\n";
                 if (state->logBytes + row.size() > kMaxLogBytes) {
@@ -664,6 +659,12 @@ private:
                     continue;
                 }
                 writeLog(logHandle, row, state->logBytes);
+            }
+            for (OutputLine& line : fresh) {
+                line.seq = state->nextSeq++;
+                state->lines.push_back(std::move(line));
+                if (state->lines.size() > kMaxKeptLines)
+                    state->lines.pop_front();
             }
         }
         if (m_onUpdate)
@@ -938,9 +939,22 @@ inline std::string openInTerminal(const Settings& st, const Detection& det,
     const std::string mintty = st.terminal == "mintty" && shLike ? minttyFor(spec.program)
                                                                  : std::string();
     if (!wt.empty()) {
-        // wt's `;` separator cannot appear inside a quoted path; documented
-        // limitation (runs folder ids contain none).
-        cmdLine = "\"" + wt + "\" -d \"" + workDir + "\" " + shellArgs;
+        // wt splits its command line on `;` even inside quotes, so every
+        // semicolon (the `exec bash -l` handover, a `;` in a path) must be
+        // escaped as `\;` or wt launches the tail as a second command and
+        // fails with 0x80070002.
+        const auto wtEscape = [](const std::string& s) {
+            std::string out;
+            out.reserve(s.size());
+            for (const char c : s) {
+                if (c == ';')
+                    out += "\\;";
+                else
+                    out += c;
+            }
+            return out;
+        };
+        cmdLine = "\"" + wt + "\" -d \"" + wtEscape(workDir) + "\" " + wtEscape(shellArgs);
     } else if (!mintty.empty()) {
         cmdLine = "\"" + mintty + "\" --dir \"" + workDir + "\" " + shellArgs;
     } else {
