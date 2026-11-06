@@ -1,0 +1,190 @@
+{
+  "$schema": "https://raw.githubusercontent.com/LingCore/WinShun-plugins/main/schema/plugin.schema.json",
+  "manifest": 1,
+  "id": "ra9fael.shell",
+  "name": {"zh": "命令执行", "en": "Quick Shell"},
+  "version": "0.1.0",
+  "description": "在搜索框里执行 shell 命令：手动输入或直接执行剪贴板内容，支持 cmd、PowerShell、Git Bash、MSYS2、WSL 和自定义 shell；结果在列表里实时刷新，Ctrl+Enter 在终端里打开。",
+  "author": "ra9fael",
+  "license": "MIT",
+  "permissions": ["processes", "clipboard:read", "clipboard:write", "notifications"],
+  "runtime": {
+    "mode": "resident",
+    "program": "shell.exe",
+    "sandbox": "normal",
+    "start": "lazy",
+    "timeoutMs": 1500,
+    "memoryMB": 128,
+    "idleExitSec": 0,
+    "encoding": "utf-8"
+  },
+  "settings": [
+    {
+      "key": "defaultShell",
+      "type": "text",
+      "title": {"zh": "默认 shell", "en": "Default shell"},
+      "hint": {"zh": "> 用的 shell：auto 或 pwsh / powershell / cmd / bash / msys / wsl / 自定义 shell 的名字", "en": "Shell for >: auto or pwsh / powershell / cmd / bash / msys / wsl / a custom shell's name"},
+      "default": "auto"
+    },
+    {
+      "key": "workDir",
+      "type": "folder",
+      "title": {"zh": "工作目录", "en": "Working directory"},
+      "hint": {"zh": "每次执行的起始目录；留空用用户主目录", "en": "Directory each run starts in; empty means the user home"},
+      "default": ""
+    },
+    {
+      "key": "pwshPath",
+      "type": "file",
+      "title": {"zh": "pwsh.exe 路径", "en": "pwsh.exe path"},
+      "hint": {"zh": "PowerShell 7 的完整路径；留空自动检测", "en": "Full path to PowerShell 7; empty means auto-detect"},
+      "default": ""
+    },
+    {
+      "key": "gitBashPath",
+      "type": "file",
+      "title": {"zh": "Git Bash 路径", "en": "Git Bash path"},
+      "hint": {"zh": "Git 自带的 bash.exe 完整路径；留空自动检测", "en": "Full path to Git's bash.exe; empty means auto-detect"},
+      "default": ""
+    },
+    {
+      "key": "msysRoot",
+      "type": "folder",
+      "title": {"zh": "MSYS2 目录", "en": "MSYS2 root"},
+      "hint": {"zh": "MSYS2 安装目录，用其中的 usr\\bin\\bash.exe", "en": "MSYS2 install folder; its usr\\bin\\bash.exe is used"},
+      "default": "C:\\msys64"
+    },
+    {
+      "key": "msysEnv",
+      "type": "choice",
+      "title": {"zh": "MSYS2 环境", "en": "MSYS2 environment"},
+      "hint": {"zh": "MSYSTEM 环境变量的值", "en": "The value of the MSYSTEM variable"},
+      "default": "UCRT64",
+      "options": ["MSYS", "UCRT64", "MINGW64", "CLANG64"]
+    },
+    {
+      "key": "customShells",
+      "type": "text",
+      "title": {"zh": "自定义 shell", "en": "Custom shells"},
+      "hint": {"zh": "格式：名字=程序 参数…，多条用 | 分隔；{script} 是脚本路径，;ext=.xx 指定扩展名，如 ucrt=C:\\msys64\\usr\\bin\\bash.exe -l {script}", "en": "Format: name=program args…, entries split by |; {script} is the script path, ;ext=.xx sets the extension, e.g. ucrt=C:\\msys64\\usr\\bin\\bash.exe -l {script}"},
+      "default": ""
+    },
+    {
+      "key": "terminal",
+      "type": "choice",
+      "title": {"zh": "终端程序", "en": "Terminal program"},
+      "hint": {"zh": "Ctrl+Enter 用哪个终端打开；wt 没装时退回 conhost，mintty 只对 Git Bash 和 MSYS2 有效", "en": "Terminal for Ctrl+Enter; wt falls back to conhost, mintty only applies to Git Bash and MSYS2"},
+      "default": "wt",
+      "options": ["wt", "conhost", "mintty"]
+    },
+    {
+      "key": "clipboardConfirm",
+      "type": "choice",
+      "title": {"zh": "剪贴板确认", "en": "Clipboard confirmation"},
+      "hint": {"zh": "执行剪贴板内容前的确认：always 总是确认；multiline 只在多行或命中危险规则时；never 不确认", "en": "Confirm before running clipboard content: always, multiline only (many lines or a danger rule), or never"},
+      "default": "always",
+      "options": ["always", "multiline", "never"]
+    },
+    {
+      "key": "outputLines",
+      "type": "number",
+      "title": {"zh": "输出行数", "en": "Output lines"},
+      "hint": {"zh": "结果页显示最后几行输出（10–190）", "en": "How many trailing output lines the result page shows (10–190)"},
+      "default": 50
+    },
+    {
+      "key": "notifyAfterSec",
+      "type": "number",
+      "title": {"zh": "通知秒数", "en": "Notify after seconds"},
+      "hint": {"zh": "运行超过几秒才发系统通知；搜索框开着且用时短于它时不通知", "en": "Runs longer than this send a system notification; shorter runs with the box open stay quiet"},
+      "default": 10
+    },
+    {
+      "key": "saveHistory",
+      "type": "bool",
+      "title": {"zh": "记录历史", "en": "Save history"},
+      "hint": {"zh": "把执行过的命令记入历史；剪贴板执行的命令默认不记", "en": "Record run commands in history; clipboard runs are not recorded by default"},
+      "default": true
+    }
+  ],
+  "commands": [
+    {
+      "id": "default",
+      "keyword": ">",
+      "title": {"zh": "执行命令（默认 shell）", "en": "Run a command (default shell)"},
+      "hint": {"zh": "例如 > ls -la · @ 列出其他 shell · # 查看运行结果", "en": "e.g. > ls -la · @ lists shells · # shows run results"},
+      "actions": [
+        {"id": "execute", "title": {"zh": "执行", "en": "Run"}, "key": "Enter"},
+        {"id": "openTerminal", "title": {"zh": "在终端里执行", "en": "Run in a terminal"}, "key": "Ctrl+Enter"},
+        {"id": "edit", "title": {"zh": "改写命令", "en": "Edit the command"}, "key": "Shift+Enter"},
+        {"id": "copyCommand", "title": {"zh": "复制命令", "en": "Copy command"}, "key": ""},
+        {"id": "deleteHistory", "title": {"zh": "从历史中删除", "en": "Delete from history"}, "key": ""}
+      ]
+    },
+    {
+      "id": "cmd",
+      "keyword": "cmd",
+      "title": {"zh": "在 cmd 中执行", "en": "Run in cmd"},
+      "hint": {"zh": "cmd dir · 按空格输入命令 · # 查看运行结果", "en": "cmd dir · press space, then type · # shows run results"},
+      "actions": [
+        {"id": "execute", "title": {"zh": "执行", "en": "Run"}, "key": "Enter"},
+        {"id": "openTerminal", "title": {"zh": "在终端里执行", "en": "Run in a terminal"}, "key": "Ctrl+Enter"},
+        {"id": "edit", "title": {"zh": "改写命令", "en": "Edit the command"}, "key": "Shift+Enter"},
+        {"id": "copyCommand", "title": {"zh": "复制命令", "en": "Copy command"}, "key": ""},
+        {"id": "deleteHistory", "title": {"zh": "从历史中删除", "en": "Delete from history"}, "key": ""}
+      ]
+    },
+    {
+      "id": "pwsh",
+      "keyword": "pwsh",
+      "title": {"zh": "在 PowerShell 7 中执行", "en": "Run in PowerShell 7"},
+      "hint": {"zh": "pwsh Get-Process · 按空格输入命令 · # 查看运行结果", "en": "pwsh Get-Process · press space, then type · # shows run results"},
+      "actions": [
+        {"id": "execute", "title": {"zh": "执行", "en": "Run"}, "key": "Enter"},
+        {"id": "openTerminal", "title": {"zh": "在终端里执行", "en": "Run in a terminal"}, "key": "Ctrl+Enter"},
+        {"id": "edit", "title": {"zh": "改写命令", "en": "Edit the command"}, "key": "Shift+Enter"},
+        {"id": "copyCommand", "title": {"zh": "复制命令", "en": "Copy command"}, "key": ""},
+        {"id": "deleteHistory", "title": {"zh": "从历史中删除", "en": "Delete from history"}, "key": ""}
+      ]
+    },
+    {
+      "id": "bash",
+      "keyword": "bash",
+      "title": {"zh": "在 Git Bash 中执行", "en": "Run in Git Bash"},
+      "hint": {"zh": "bash ls -la · 按空格输入命令 · # 查看运行结果", "en": "bash ls -la · press space, then type · # shows run results"},
+      "actions": [
+        {"id": "execute", "title": {"zh": "执行", "en": "Run"}, "key": "Enter"},
+        {"id": "openTerminal", "title": {"zh": "在终端里执行", "en": "Run in a terminal"}, "key": "Ctrl+Enter"},
+        {"id": "edit", "title": {"zh": "改写命令", "en": "Edit the command"}, "key": "Shift+Enter"},
+        {"id": "copyCommand", "title": {"zh": "复制命令", "en": "Copy command"}, "key": ""},
+        {"id": "deleteHistory", "title": {"zh": "从历史中删除", "en": "Delete from history"}, "key": ""}
+      ]
+    },
+    {
+      "id": "msys",
+      "keyword": "msys",
+      "title": {"zh": "在 MSYS2 中执行", "en": "Run in MSYS2"},
+      "hint": {"zh": "msys uname -a · 按空格输入命令 · # 查看运行结果", "en": "msys uname -a · press space, then type · # shows run results"},
+      "actions": [
+        {"id": "execute", "title": {"zh": "执行", "en": "Run"}, "key": "Enter"},
+        {"id": "openTerminal", "title": {"zh": "在终端里执行", "en": "Run in a terminal"}, "key": "Ctrl+Enter"},
+        {"id": "edit", "title": {"zh": "改写命令", "en": "Edit the command"}, "key": "Shift+Enter"},
+        {"id": "copyCommand", "title": {"zh": "复制命令", "en": "Copy command"}, "key": ""},
+        {"id": "deleteHistory", "title": {"zh": "从历史中删除", "en": "Delete from history"}, "key": ""}
+      ]
+    },
+    {
+      "id": "wsl",
+      "keyword": "wsl",
+      "title": {"zh": "在 WSL 中执行", "en": "Run in WSL"},
+      "hint": {"zh": "wsl uname -a · 按空格输入命令 · # 查看运行结果", "en": "wsl uname -a · press space, then type · # shows run results"},
+      "actions": [
+        {"id": "execute", "title": {"zh": "执行", "en": "Run"}, "key": "Enter"},
+        {"id": "openTerminal", "title": {"zh": "在终端里执行", "en": "Run in a terminal"}, "key": "Ctrl+Enter"},
+        {"id": "edit", "title": {"zh": "改写命令", "en": "Edit the command"}, "key": "Shift+Enter"},
+        {"id": "copyCommand", "title": {"zh": "复制命令", "en": "Copy command"}, "key": ""},
+        {"id": "deleteHistory", "title": {"zh": "从历史中删除", "en": "Delete from history"}, "key": ""}
+      ]
+    }
+  ]
+}
