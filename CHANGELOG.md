@@ -42,6 +42,9 @@
 - 传 UTF-16 环境块缺 `CREATE_UNICODE_ENVIRONMENT` 标志（后台和终端两处）。
 - `spawn()` 在 `start()` 已持有 `m_mutex` 时再次加锁导致协议线程自死锁，
   改为 job 句柄回传登记。
+- `emit()` 先 `std::move` 行再写日志，日志文件里只剩换行符；改为先写日志、
+  再 move 进环形缓冲。
+- 结果页的操作行改到状态行之后、输出行之前，长输出时不用翻到末尾。
 
 [Unreleased]: https://github.com/ra9fael/winshun-shell/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/ra9fael/winshun-shell/releases/tag/v0.1.0

@@ -54,6 +54,10 @@ First release.
 - `spawn()` locked `m_mutex` while `start()` already held it, self-deadlocking
   the protocol thread; the job handle is now handed back and registered by
   the caller.
+- `emit()` moved the output lines before writing the log, leaving the log
+  files with bare newlines; the log is now written before the move.
+- The result-page action rows moved to just after the status row, before the
+  output lines, so long output does not bury them.
 
 [Unreleased]: https://github.com/ra9fael/winshun-shell/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/ra9fael/winshun-shell/releases/tag/v0.1.0
