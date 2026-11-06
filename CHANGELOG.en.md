@@ -45,7 +45,7 @@ First release.
 - Output decoding: each line is tried as UTF-8 first, falls back to the OEM
   code page, and `wsl.exe`'s UTF-16LE errors decode as well.
 
-### Fixed during integration testing
+### Fixed during on-machine and integration testing
 
 - The Unicode environment block was not sorted by variable name, which made
   `CreateProcessW` fail with 87.
@@ -54,10 +54,11 @@ First release.
 - `spawn()` locked `m_mutex` while `start()` already held it, self-deadlocking
   the protocol thread; the job handle is now handed back and registered by
   the caller.
-- `emit()` moved the output lines before writing the log, leaving the log
-  files with bare newlines; the log is now written before the move.
-- The result-page action rows moved to just after the status row, before the
-  output lines, so long output does not bury them.
+- Result-page actions sat behind the output lines, unreachable at the bottom
+  of long output; they now come right after the status row.
+- Log files held nothing but newlines: output lines were moved into the ring
+  buffer before the log was written from the moved-from object; the log is
+  written first now.
 
 [Unreleased]: https://github.com/ra9fael/winshun-shell/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/ra9fael/winshun-shell/releases/tag/v0.1.0

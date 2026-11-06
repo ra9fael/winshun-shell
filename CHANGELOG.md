@@ -36,15 +36,15 @@
 - 输出解码：逐行先试 UTF-8，失败退回 OEM 代码页，`wsl.exe` 的 UTF-16LE 报错
   也能解。
 
-### 集成验证里修掉的问题
+### 真机与集成验证里修掉的问题
 
 - Unicode 环境块未按变量名排序导致 `CreateProcessW` 报 87。
 - 传 UTF-16 环境块缺 `CREATE_UNICODE_ENVIRONMENT` 标志（后台和终端两处）。
 - `spawn()` 在 `start()` 已持有 `m_mutex` 时再次加锁导致协议线程自死锁，
   改为 job 句柄回传登记。
-- `emit()` 先 `std::move` 行再写日志，日志文件里只剩换行符；改为先写日志、
-  再 move 进环形缓冲。
-- 结果页的操作行改到状态行之后、输出行之前，长输出时不用翻到末尾。
+- 结果页操作行排在输出行后面，长输出要翻到底才够得到；移到状态行后面。
+- 日志文件只剩换行符：输出行先被移进环形缓冲、后从移空的对象写日志；
+  改为先写日志再移动。
 
 [Unreleased]: https://github.com/ra9fael/winshun-shell/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/ra9fael/winshun-shell/releases/tag/v0.1.0
