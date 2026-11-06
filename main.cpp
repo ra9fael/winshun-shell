@@ -576,34 +576,9 @@ private:
                                         {"command", run->command}});
         items.push_back(std::move(status));
 
-        std::vector<OutputLine> lines;
-        {
-            const std::lock_guard lock(run->mutex);
-            lines.assign(run->lines.begin(), run->lines.end());
-        }
-        const std::size_t shown = lines.size() > static_cast<std::size_t>(st.outputLines)
-                                      ? static_cast<std::size_t>(st.outputLines)
-                                      : lines.size();
-        const std::size_t firstShown = lines.size() - shown;
-        for (std::size_t i = firstShown; i < lines.size(); ++i) {
-            Item line(base + ":line:" + std::to_string(lines[i].seq), showInvisibles(lines[i].text));
-            if (lines[i].isErr)
-                line.withIcon("color:#dc2626");
-            line.withActions({{"copyLine", tr(zh, "复制此行", "Copy this line"), "Enter"}})
-                .withData(Json::Object {{"kind", "line"},
-                                        {"runId", id},
-                                        {"text", lines[i].text}});
-            items.push_back(std::move(line));
-        }
-        if (lines.size() > shown)
-            items.push_back(
-                Item(base + ":truncated",
-                     tr(zh, "只显示最后 " + std::to_string(shown) + " 行，完整输出在日志里",
-                        "Only the last " + std::to_string(shown) + " lines; the log has it all"))
-                    .withPath(run->logPath)
-                    .invalid());
-
-        if (!lines.empty())
+        // Action rows come before the output so the user does not have to
+        // scroll to the bottom of long output to reach them.
+        if (!run->lines.empty())
             items.push_back(
                 Item(base + ":copyAll", tr(zh, "复制全部输出", "Copy all output"))
                     .withActions({{"copyAll", tr(zh, "复制", "Copy"), "Enter"}})
@@ -633,6 +608,34 @@ private:
                                                 {"shell", run->shellName},
                                                 {"command", run->command}}));
         }
+
+        std::vector<OutputLine> lines;
+        {
+            const std::lock_guard lock(run->mutex);
+            lines.assign(run->lines.begin(), run->lines.end());
+        }
+        const std::size_t shown = lines.size() > static_cast<std::size_t>(st.outputLines)
+                                      ? static_cast<std::size_t>(st.outputLines)
+                                      : lines.size();
+        const std::size_t firstShown = lines.size() - shown;
+        for (std::size_t i = firstShown; i < lines.size(); ++i) {
+            Item line(base + ":line:" + std::to_string(lines[i].seq), showInvisibles(lines[i].text));
+            if (lines[i].isErr)
+                line.withIcon("color:#dc2626");
+            line.withActions({{"copyLine", tr(zh, "复制此行", "Copy this line"), "Enter"}})
+                .withData(Json::Object {{"kind", "line"},
+                                        {"runId", id},
+                                        {"text", lines[i].text}});
+            items.push_back(std::move(line));
+        }
+        if (lines.size() > shown)
+            items.push_back(
+                Item(base + ":truncated",
+                     tr(zh, "只显示最后 " + std::to_string(shown) + " 行，完整输出在日志里",
+                        "Only the last " + std::to_string(shown) + " lines; the log has it all"))
+                    .withPath(run->logPath)
+                    .invalid());
+
         return items;
     }
 
