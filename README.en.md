@@ -146,8 +146,10 @@ terminal; the plugin never shows a UAC prompt.
 - The full output goes to a log file; Enter on the truncation row opens it.
   On the status row, Enter cancels while running (the whole process tree
   dies) and re-runs after completion.
-- Action rows: `Copy all output` · `Open log in editor` · `Re-run in terminal`
-  · `Add to history` (only on result pages of clipboard runs).
+- Action rows sit right under the status row, **before** the output lines:
+  `Copy all output` · `Open log in editor` · `Re-run in terminal` ·
+  `Add to history` (only on result pages of clipboard runs) — no need to
+  scroll to the end of long output to reach them.
 - At most 4 commands run concurrently; a further start reports the limit.
   After Esc collapses the search box the command keeps running and sends a
   system notification when done (the body names only the exit code and
