@@ -8,6 +8,14 @@ lives in [CHANGELOG.md](CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-08
+
+### Fixed
+
+- The manifest declares `minWinShun: 0.22.0` and the README says why: this is
+  a native exe package, admitted by the index as an unreviewed native plugin;
+  older hosts have no install-risk confirmation for such packages.
+
 ## [0.2.0] - 2026-11-08
 
 ### Added
@@ -106,6 +114,7 @@ First release.
   buffer before the log was written from the moved-from object; the log is
   written first now.
 
-[Unreleased]: https://github.com/ra9fael/winshun-shell/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/ra9fael/winshun-shell/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/ra9fael/winshun-shell/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/ra9fael/winshun-shell/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ra9fael/winshun-shell/releases/tag/v0.1.0

@@ -3,11 +3,12 @@
   "manifest": 1,
   "id": "ra9fael.shell",
   "name": {"zh": "命令执行", "en": "Quick Shell"},
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "在搜索框里执行 shell 命令：手动输入或直接执行剪贴板内容，支持 cmd、PowerShell、Git Bash、MSYS2、WSL 和自定义 shell；普通命令结果在列表里实时刷新，Ctrl+Enter 在终端里打开；可经 UAC 确认以管理员在终端窗口执行（仅 cmd 和 PowerShell，窗口跑完留存）。",
   "author": "ra9fael",
   "license": "MIT",
   "permissions": ["processes", "clipboard:read", "clipboard:write", "notifications"],
+  "minWinShun": "0.22.0",
   "runtime": {
     "mode": "resident",
     "program": "shell.exe",

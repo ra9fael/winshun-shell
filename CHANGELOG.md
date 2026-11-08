@@ -8,6 +8,13 @@
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-08
+
+### Fixed
+
+- 清单声明 `minWinShun: 0.22.0` 并在 README 写明：本插件是原生 exe 包，插件库
+  按「未审核的原生插件」收录，旧版宿主没有这类包的安装风险确认。
+
 ## [0.2.0] - 2026-11-08
 
 ### Added
@@ -77,6 +84,7 @@
 - 日志文件只剩换行符：输出行先被移进环形缓冲、后从移空的对象写日志；
   改为先写日志再移动。
 
-[Unreleased]: https://github.com/ra9fael/winshun-shell/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/ra9fael/winshun-shell/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/ra9fael/winshun-shell/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/ra9fael/winshun-shell/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ra9fael/winshun-shell/releases/tag/v0.1.0

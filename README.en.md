@@ -27,6 +27,12 @@ commands can also run as administrator after a UAC confirmation
    Turn the plugin on in the list; enabling it is your confirmation of the
    permissions it asks for (see [Permissions and data](#permissions-and-data)).
 
+This plugin is a native exe package. Since Win顺 0.22.0 the plugin index
+admits community exe packages as **unreviewed native plugins**
+(`unreviewed-native`), so it needs Win顺 0.22.0 or newer (declared by
+`minWinShun` in the manifest); installing and every update ask for
+confirmation.
+
 **Update:** install the new `.wsplugin` the same way. Win顺 recognises the id,
 asks before replacing the old version, and keeps the plugin's data folder.
 
