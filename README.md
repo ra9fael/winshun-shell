@@ -307,6 +307,12 @@ shell-admin-verification.md 的手工步骤）。
 `build/`、日志和任何未跟踪内容都不会进入发布包。每次发布都要递增 `version`；
 见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
+每个 `v<版本>` tag 由 GitHub Actions 在该提交上构建并发布
+（[.github/workflows/release.yml](.github/workflows/release.yml)：构建 →
+单元测试 → 打包 → 发布），Release 附件就是插件库条目
+（`plugins/ra9fael.shell.json`）的下载地址与 sha256 的来源；已发布的
+版本与附件永不替换，改动只能发新版本。
+
 ## 许可证
 
 MIT，见 [LICENSE](LICENSE)。发布历史见 [CHANGELOG.md](CHANGELOG.md)。

@@ -384,6 +384,13 @@ git-tracked files plus the built `shell.exe`, so `build/`, logs and anything
 untracked never enter a release package. Bump `version` on every release; see
 [CONTRIBUTING.md](CONTRIBUTING.md).
 
+Every `v<version>` tag is built and published by GitHub Actions at that
+commit ([.github/workflows/release.yml](.github/workflows/release.yml):
+build → unit tests → package → publish); the Release assets are where the
+plugin-index entry (`plugins/ra9fael.shell.json`) takes its download URL and
+sha256 from. Published versions and assets are never replaced; changes ship
+as new versions.
+
 ## License
 
 MIT, see [LICENSE](LICENSE). Release history in [CHANGELOG.md](CHANGELOG.md).

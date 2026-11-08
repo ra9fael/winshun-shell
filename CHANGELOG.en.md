@@ -8,6 +8,15 @@ lives in [CHANGELOG.md](CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-08
+
+### Changed
+
+- Manifest aligned with the index requirements: `description` became a
+  bilingual object and `homepage` was added; the README's "Distribution and
+  versions" now documents that Releases are built by CI at the tag commit and
+  where the index entry's hash comes from.
+
 ## [0.2.1] - 2026-11-08
 
 ### Fixed
@@ -114,7 +123,8 @@ First release.
   buffer before the log was written from the moved-from object; the log is
   written first now.
 
-[Unreleased]: https://github.com/ra9fael/winshun-shell/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/ra9fael/winshun-shell/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/ra9fael/winshun-shell/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/ra9fael/winshun-shell/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/ra9fael/winshun-shell/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ra9fael/winshun-shell/releases/tag/v0.1.0

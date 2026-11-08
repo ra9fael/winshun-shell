@@ -8,6 +8,13 @@
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-11-08
+
+### Changed
+
+- 清单对齐收录要求：`description` 改双语对象、补 `homepage`；README 的
+  「分发与版本」写明 Release 由 CI 在 tag 提交上构建、条目哈希的来源。
+
 ## [0.2.1] - 2026-11-08
 
 ### Fixed
@@ -84,7 +91,8 @@
 - 日志文件只剩换行符：输出行先被移进环形缓冲、后从移空的对象写日志；
   改为先写日志再移动。
 
-[Unreleased]: https://github.com/ra9fael/winshun-shell/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/ra9fael/winshun-shell/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/ra9fael/winshun-shell/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/ra9fael/winshun-shell/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/ra9fael/winshun-shell/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ra9fael/winshun-shell/releases/tag/v0.1.0
