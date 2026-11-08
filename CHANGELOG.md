@@ -8,6 +8,37 @@
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-08
+
+### Added
+
+- 以管理员执行（cmd 和 PowerShell 7 / 5.1）：命令页运行行多 **Ctrl+Shift+Enter**
+  动作、下方多一条独立「以管理员执行」行（Enter 触发），历史行同样带管理员动作。
+  UAC 确认对象固定是系统的 `System32\cmd.exe`，命令文本写在脚本文件里、不进
+  命令行；同意后打开一个**可见的管理员终端窗口**，输出在窗口里、有真实输入、
+  跑完窗口留着，交互式命令直接操作。结果不返回 Win顺：没有结果页和日志，插件
+  只发通知报告打开/拒绝/失败；窗口归桌面所有，Win顺 退出不影响它。`terminal=wt`
+  时走二段式：提权 cmd 拉起 wt.exe 新窗口后即退出，管理员窗口落在 Windows
+  Terminal（外层黑框闪一下）；wt 缺失或设置不是 wt 时由提权 cmd 自开控制台。
+  新设置 `adminTerminal`（`auto` 默认跟随 `terminal` / `wt` 永远二段式 /
+  `conhost` 永远直开）决定管理员窗口宿主，只管管理员窗口。
+  UAC 流程一次一条（窗口可并存）；拒绝通知「UAC 已拒绝，没有执行」，提权失败
+  通知「无法提权（错误 N）」，两者都不进历史。新设置 `adminMode`（`ask` 默认 /
+  `off` 关闭入口）。Git Bash、MSYS2、WSL 和自定义 shell 无管理员入口。
+- 命令页独立行「在终端执行：<命令>」（Enter 直达，所有 shell 都有）：与
+  Ctrl+Enter 同一能力——终端窗口里跑命令、窗口留存、结果不进列表。
+
+### Changed
+
+- 同步主仓库最新插件 SDK（`winshun.h`）：`Item::withDetails()` 与
+  `details()` 覆写（内容详情与预览，GitHub #202）、`serve(in, out)` 插件
+  宿主接入、`appearance()` 新增 uiStyle/nativeLook 外观字段。均为可选
+  能力，本插件暂未使用；线上协议没有变化，旧版 Win顺 照常可用。
+- 普通后台路径的内存与输出加固（插件常驻不退出，防宿主因内存或超长输出行
+  击杀）：内存里只保留最近 50 个已结束的运行；环形缓冲单行超 4 KB 截断并注明
+  （日志保留整行）；无换行的超长输出读缓冲封顶 1 MB，超限部分直送日志、列表
+  只留头部。
+
 ## [0.1.0] - 2026-11-06
 
 首个版本。
@@ -46,5 +77,6 @@
 - 日志文件只剩换行符：输出行先被移进环形缓冲、后从移空的对象写日志；
   改为先写日志再移动。
 
-[Unreleased]: https://github.com/ra9fael/winshun-shell/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ra9fael/winshun-shell/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/ra9fael/winshun-shell/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ra9fael/winshun-shell/releases/tag/v0.1.0

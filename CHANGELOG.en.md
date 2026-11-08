@@ -8,6 +8,52 @@ lives in [CHANGELOG.md](CHANGELOG.md).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-11-08
+
+### Added
+
+- Run as administrator (cmd and PowerShell 7 / 5.1): the command page's run
+  row gains a **Ctrl+Shift+Enter** action and a standalone "Run as
+  administrator" row below it (Enter triggers), and history rows gain the
+  same admin action. The UAC consent object is always the system's
+  `System32\cmd.exe`; the command text lives in a script file, never on the
+  command line. After consent a **visible admin terminal window** opens: the
+  output is in the window, stdin is real, the window stays after the command,
+  and interactive commands are operated right there. Results do not return to
+  WinShun — no result page and no log; the plugin only notifies opened /
+  declined / failed. The window belongs to the desktop, so quitting WinShun
+  does not affect it. With `terminal=wt` a two-stage start puts the admin
+  window inside Windows Terminal (the elevated cmd launches wt.exe and exits;
+  the outer black box flashes once); without wt, or for other `terminal`
+  values, the elevated cmd hosts the payload in its own console. New setting
+  `adminTerminal` (`auto` default follows `terminal` / `wt` always two-stage /
+  `conhost` always direct) chooses the admin window's host and governs admin
+  windows only.
+  One UAC flow
+  at a time (windows may coexist); a declined UAC notifies "UAC declined;
+  nothing ran" and a failed elevation "Cannot elevate (error N)" — neither
+  reaches history. New setting `adminMode` (`ask` default / `off` removes
+  every admin entry). Git Bash, MSYS2, WSL and custom shells have no admin
+  entry.
+- A standalone command-page row "Run in a terminal: <command>" (Enter
+  triggers, every shell): the same capability as Ctrl+Enter — the command
+  runs in a terminal window that stays, results do not return to the list.
+
+### Changed
+
+- Synced the latest plugin SDK (`winshun.h`) from the main repo:
+  `Item::withDetails()` and the `details()` override (content details and
+  the preview, GitHub #202), `serve(in, out)` for the plugin host, and the
+  uiStyle/nativeLook keys in `appearance()`. All are optional capabilities
+  the plugin does not use yet; the wire protocol is unchanged and older
+  WinShun versions keep working.
+- Memory and output hardening for the normal background path (the plugin is
+  resident and never idles out; this keeps the host from killing it over
+  memory or an over-long output line): only the newest 50 finished runs stay
+  in RAM; a ring-buffer line over 4 KB is truncated and marked (the log keeps
+  it whole); a newline-less output caps the read buffer at 1 MB, streaming
+  the excess straight to the log while the list keeps only the head.
+
 ## [0.1.0] - 2026-11-06
 
 First release.
@@ -60,5 +106,6 @@ First release.
   buffer before the log was written from the moved-from object; the log is
   written first now.
 
-[Unreleased]: https://github.com/ra9fael/winshun-shell/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/ra9fael/winshun-shell/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/ra9fael/winshun-shell/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/ra9fael/winshun-shell/releases/tag/v0.1.0
