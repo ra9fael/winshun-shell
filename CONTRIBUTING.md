@@ -44,14 +44,95 @@ New-Item -ItemType Junction -Path "$env:LOCALAPPDATA\WinShun\plugins\ra9fael.she
 `winshun.h` 是 Win顺 SDK 头文件（`WinShun/src/plugins-sdk/winshun.h`）的
 逐字节复制，不要在这里改它；要更新就从上游单独提交。
 
+## 代码地图
+
+| 文件 | 职责 |
+|---|---|
+| `winshun.h` | Win顺 SDK 头，协议与宿主契约（不改） |
+| `logic.h` | **纯核心**：输入解析、shell 检测与脚本生成、输出解码清洗、危险规则、历史、上限截断、管理员窗口包装行——不碰 Win32，单元测试全在这里 |
+| `runner.h` | **运行时**：`RunManager`（后台运行的双管道/作业对象/环形缓冲/日志）、`openInTerminal`（Ctrl+Enter 的 wt/conhost/mintty）、`openAdminWindow`（提权窗口：直开或二段式进 WT） |
+| `main.cpp` | **插件胶水**：协议循环、查询→行渲染、动作分发、设置、通知、历史落盘 |
+| `tests/test_logic.cpp` | logic.h 的单元测试（`ctest` 跑 `shell_tests`） |
+| `tools/package.py` | 打包 `dist/<id>-<version>.wsplugin`（确定性 zip） |
+
+线程模型：协议线程只做字符串拼装和登记，绝不等待子进程；一切会阻塞的
+（读管道、UAC 安全桌面）都在 worker 线程。查询被拖住三次就会被宿主按挂死
+重启，这是所有线程决定的第一约束。
+
+```mermaid
+flowchart TB
+    subgraph P["协议线程 · main.cpp"]
+        Q["query：输入 → 解析 → 行渲染"]
+        A["action：执行 / 终端 / 管理员 / 历史 / 复制"]
+        N["通知（send 线程安全）· 历史落盘"]
+    end
+    subgraph L["logic.h · 纯核心（L1 单测）"]
+        PA["parseInput · dangerRules"]
+        SH["shellSpec · scriptFor · scriptBytes"]
+        CP["decodeChunk · truncateLine · buildAdminWindowParams"]
+    end
+    subgraph R["runner.h · worker 线程"]
+        SR["start：后台运行<br/>双管道 + 作业对象"]
+        RD["reader → emit<br/>OEM/UTF-8 解码 → 环形缓冲 + 日志"]
+        OT["openInTerminal<br/>wt / conhost / mintty"]
+        AW["openAdminWindow<br/>runas：cmd /k 直开 或 二段式 wt"]
+    end
+    Q --> PA
+    PA --> SH
+    Q --> CP
+    A --> SR
+    A --> OT
+    A --> AW
+    SR --> RD
+    RD --> N
+    AW --> N
+```
+
+三条执行路径的动作流；管理员路径的完整时序（UAC 在 worker 阻塞、窗口拥有
+进程、结果不回列表）：
+
+```mermaid
+sequenceDiagram
+    participant U as 用户
+    participant P as 插件（协议线程）
+    participant W as worker 线程
+    participant C as System32 cmd.exe
+    participant T as wt / 控制台窗口
+    U->>P: Ctrl+Shift+Enter（executeAdmin）
+    P->>P: 守卫：adminMode · adminCapable · m_adminBusy
+    P->>W: 开线程，立即返回 keep
+    W->>W: 写脚本 runs\t<tick>.cmd|.ps1 → fnv1a64 重读比对（不符重写一次）
+    W->>C: ShellExecuteExW(runas, /d /s /k|/c …)，安全桌面期间阻塞
+    C->>U: UAC 弹窗
+    alt 拒绝（1223）
+        W->>U: 通知「UAC 已拒绝，没有执行」；不进历史
+    else 同意
+        C->>T: 二段式：/c 拉起 wt.exe 跑脚本后即退<br/>直开：/k 自宿 payload
+        W->>U: 通知「已在管理员窗口打开」；记历史（退出码未知）
+    end
+    W->>W: m_adminBusy = false
+```
+
 ## 测试
 
 - `ctest` 跑 `shell_tests`：只测 `logic.h` 里的纯函数（输入解析、自定义
-  shell 解析、脚本生成、WSL 路径转换、输出解码、危险规则、历史、清理），
-  不起进程、不依赖系统状态，任何 C++17 编译器都能跑。
+  shell 解析、脚本生成、WSL 路径转换、输出解码、危险规则、历史、清理、
+  管理员窗口包装行与 `wtEscape`、输出行截断、设置值回落），不起进程、
+  不依赖系统状态，任何 C++17 编译器都能跑。
 - 集成测试用真 shell 驱动 stdio 协议（脚本见设计文档 `shell-plugin-design.md`
   的测试计划一节）。改动 runner、shell 检测或协议胶水后，至少跑一遍
   cmd / pwsh / bash 的执行、取消和剪贴板确认场景，结果补进设计文档第 9 节。
+
+分层约定（详单见两份设计文档的测试计划节）：
+
+| 层 | 内容 | 跑法 |
+|---|---|---|
+| L0 | plugin.json schema（装载即验） | wsbench / Win顺 |
+| L1 | logic.h 纯函数 | `ctest`，任何平台 |
+| L2 | 专项探针（有过 admin 提权探针，窗口模型后退役） | 视需要 |
+| L3 | 真实宿主：wsbench 驱动查询/动作/设置往返；**绝不触发 executeAdmin**（真实 UAC） | wsbench |
+| L4 | 真机手工：真实 UAC、窗口行为、通知点击 | 维护者 |
+| L5 | 发版：`tools/package.py --tag` | 发版时 |
 
 ## Pull request
 

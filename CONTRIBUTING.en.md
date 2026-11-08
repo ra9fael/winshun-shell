@@ -53,17 +53,102 @@ exe. Remove an installed non-linked copy of the same id first.
 (`WinShun/src/plugins-sdk/winshun.h`). Do not edit it here; update it from
 upstream as a separate commit.
 
+## Code map
+
+| File | Responsibility |
+|---|---|
+| `winshun.h` | The Win顺 SDK header: protocol and host contract (do not edit) |
+| `logic.h` | **Pure core**: input parsing, shell detection and script generation, output decode/cleaning, danger rules, history, cap truncation, the admin window wrapper — no Win32; all unit tests live here |
+| `runner.h` | **Runtime**: `RunManager` (background runs' dual pipes / job object / ring buffer / log), `openInTerminal` (Ctrl+Enter's wt/conhost/mintty), `openAdminWindow` (the elevated window: direct or two-stage into WT) |
+| `main.cpp` | **Plugin glue**: protocol loop, query→row rendering, action dispatch, settings, notifications, history persistence |
+| `tests/test_logic.cpp` | Unit tests for logic.h (`ctest` runs `shell_tests`) |
+| `tools/package.py` | Packs `dist/<id>-<version>.wsplugin` (deterministic zip) |
+
+Threading model: the protocol thread only assembles strings and registers
+state, and never waits on a child; anything that blocks (reading pipes, the
+UAC secure desktop) runs on worker threads. A query held too long three times
+gets the plugin hang-restarted by the host — that is the first constraint
+behind every threading decision.
+
+```mermaid
+flowchart TB
+    subgraph P["Protocol thread · main.cpp"]
+        Q["query: input → parse → row rendering"]
+        A["action: run / terminal / admin / history / copy"]
+        N["Notifications (send is thread-safe) · history persistence"]
+    end
+    subgraph L["logic.h · pure core (L1 unit tests)"]
+        PA["parseInput · dangerRules"]
+        SH["shellSpec · scriptFor · scriptBytes"]
+        CP["decodeChunk · truncateLine · buildAdminWindowParams"]
+    end
+    subgraph R["runner.h · worker threads"]
+        SR["start: background run<br/>dual pipes + job object"]
+        RD["reader → emit<br/>OEM/UTF-8 decode → ring buffer + log"]
+        OT["openInTerminal<br/>wt / conhost / mintty"]
+        AW["openAdminWindow<br/>runas: direct cmd /k or two-stage wt"]
+    end
+    Q --> PA
+    PA --> SH
+    Q --> CP
+    A --> SR
+    A --> OT
+    A --> AW
+    SR --> RD
+    RD --> N
+    AW --> N
+```
+
+The three execution paths; and the full sequence of the admin path (UAC
+blocking the worker, the window owning the process, results not returning to
+the list):
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant P as Plugin (protocol thread)
+    participant W as Worker thread
+    participant C as System32 cmd.exe
+    participant T as wt / console window
+    U->>P: Ctrl+Shift+Enter (executeAdmin)
+    P->>P: guards: adminMode · adminCapable · m_adminBusy
+    P->>W: spawn thread, return keep at once
+    W->>W: write script runs\t<tick>.cmd|.ps1 → fnv1a64 re-read check (one rewrite retry)
+    W->>C: ShellExecuteExW(runas, /d /s /k|/c …), blocked under the secure desktop
+    C->>U: UAC dialog
+    alt declined (1223)
+        W->>U: notify "UAC declined; nothing ran"; no history
+    else consented
+        C->>T: two-stage: /c launches wt.exe then exits<br/>direct: /k hosts the payload itself
+        W->>U: notify "Opened in an admin window"; history recorded (exit code unknown)
+    end
+    W->>W: m_adminBusy = false
+```
+
 ## Tests
 
 - `ctest` runs `shell_tests`: pure functions from `logic.h` only (input
   parsing, custom shell parsing, script generation, WSL path conversion,
-  output decoding, danger rules, history, cleanup). No processes are started
-  and no system state is needed; any C++17 compiler runs them.
+  output decoding, danger rules, history, cleanup, the admin window wrapper
+  and `wtEscape`, output-line truncation, setting-value fallbacks). No
+  processes are started and no system state is needed; any C++17 compiler
+  runs them.
 - Integration tests drive the stdio protocol against real shells (the scripts
   are described in the test-plan section of `shell-plugin-design.md`). After
   touching the runner, shell detection or the protocol glue, at least run the
   cmd / pwsh / bash execution, cancel and clipboard-confirmation scenarios and
   record the results in §9 of the design document.
+
+The layering convention (details in both design docs' test-plan sections):
+
+| Layer | Content | Where |
+|---|---|---|
+| L0 | plugin.json schema (validated at load) | wsbench / WinShun |
+| L1 | logic.h pure functions | `ctest`, any platform |
+| L2 | dedicated probes (an admin-elevation probe existed; retired with the window model) | as needed |
+| L3 | real host: wsbench drives query/action/settings round trips; **never triggers executeAdmin** (a real UAC) | wsbench |
+| L4 | real machine, manual: real UAC, window behavior, notification clicks | maintainer |
+| L5 | release: `tools/package.py --tag` | at release |
 
 ## Pull requests
 

@@ -9,8 +9,11 @@
 Run shell commands from the Win顺 search box: typed by hand, or taken straight
 from the clipboard. Supports cmd, PowerShell 7, Git Bash, MSYS2, WSL and custom
 shells. Commands run in the background and their output refreshes live in the
-result list; Ctrl+Enter runs the same command in a terminal. The plugin is a
-C++ resident exe with no window of its own.
+result list; Ctrl+Enter runs the same command in a terminal; cmd and PowerShell
+commands can also run as administrator after a UAC confirmation
+(Ctrl+Shift+Enter). The plugin is a C++ resident exe with no window of its own.
+
+![The admin terminal-window model: the command page's three-row layout · the admin window · the result page for contrast](docs/shell-admin-window-wireframe.svg)
 
 ## Install
 
@@ -119,19 +122,95 @@ nu = C:\tools\nu\nu.exe -f {script} | py = py -3 - ;ext=.py
 - The program must be an **existing absolute path**; the plugin never loads a
   program from its data folder.
 
+### Run as administrator
+
+The command pages for cmd and PowerShell 7 / 5.1 gain two entries (neither
+appears when the `adminMode` setting is `off`; Git Bash, MSYS2, WSL and custom
+shells have none):
+
+- The run row's action bar gains **Ctrl+Shift+Enter — run as administrator**;
+- A standalone row below it, "Run as administrator: <command>" (subtitle
+  `UAC prompt · terminal window · <shell>`), triggered with plain **Enter** so
+  it is reachable from the keyboard alone; history rows carry Ctrl+Shift+Enter
+  as well.
+
+Triggering it opens one UAC prompt whose consent object is always the
+system's own `C:\Windows\System32\cmd.exe` — the command text never enters
+the command line but lives in a script file. After consent a **visible admin
+terminal window** opens: the output is in the window, stdin is real, and the
+window stays after the command finishes (cmd at the prompt, PowerShell in the
+session via `-NoExit`); interactive commands (`pause`, installer wizards) are
+operated right there. Results do **not** return to WinShun — no result page,
+no log file; the plugin only sends a notification reporting opened / declined
+/ failed. The plugin does not declare the `elevated` permission and the host
+never elevates on the plugin's behalf; the UAC click is always yours.
+
+Why a window: an elevated process cannot join the plugin's job, cannot be
+cancelled, and the plugin itself may be reclaimed by the host at any time
+(idle, slot eviction, crash kill) — any machinery that "brings results back to
+the list" is unreliable. The window owns the process: it keeps running when
+WinShun exits, and the whole class of problems disappears. The cost is that
+output cannot be copied/searched from the plugin and the exit code does not
+enter history — commands that need admin are more naturally done in a window
+anyway.
+
+What hosts the admin window is the `adminTerminal` setting (default `auto`
+follows `terminal`; `wt` always tries the two-stage form, `conhost` always
+direct). The OS-level "default terminal application" setting does not help —
+it applies to normal-privilege consoles, while **an elevated window is still
+hosted by conhost** (measured 2026-11-08: an elevated cmd from Task Manager
+behaves the same). So the two-stage start into Windows Terminal only happens
+when `adminTerminal` resolves to wt: the consent object is still System32
+cmd.exe, but with `/c` — the elevated cmd launches wt.exe in its session and
+exits at once, leaving only the WT window; the cost is a brief flash of the
+outer black box. When the two-stage form is not taken (`conhost`, a
+non-wt `terminal`, or wt not installed), the elevated cmd hosts the payload
+in its own (conhost) console — still visible and still staying.
+
+Limits (by design, not bugs):
+
+- **One UAC flow at a time.** Triggering another admin run while the prompt is
+  unanswered only notifies "an admin permission request is already pending";
+  once open, windows are independent and several may coexist.
+- Declining the UAC prompt: a notification "UAC declined; nothing ran". A
+  failed elevation (for example a system policy that disables UAC prompts):
+  "Cannot elevate (error N)". Neither ran anything, neither reaches history.
+- An admin window does **not** die with WinShun; it finishes and stays there
+  for you to close.
+- A successfully opened window reaches history (with `saveHistory` on); the
+  exit code is unknown and is not shown.
+
 ## Actions
 
 Actions are declared in a fixed order; the keyboard mapping follows the
 **order**, not the `key` string.
 
-| Command | Enter | Ctrl+Enter | Shift+Enter | Menu (no key) |
-|---|---|---|---|---|
-| All commands | `execute` — run in the background, results in the list | `openTerminal` — run in a terminal, window stays open | `edit` — put the command back in the search box for editing | `copyCommand` — copy the command; `deleteHistory` — delete from history |
+| Command | Enter | Ctrl+Shift+Enter | Ctrl+Enter | Shift+Enter | Menu (no key) |
+|---|---|---|---|---|---|
+| All commands | `execute` — run in the background, results in the list | `executeAdmin` — run as administrator after a UAC prompt (cmd / PowerShell only; absent when `adminMode=off`) | `openTerminal` — run in a terminal, window stays open | `edit` — put the command back in the search box for editing | `copyCommand` — copy the command; `deleteHistory` — delete from history |
 
 Interactive commands (`python`, `ssh`, `vim`, anything asking for a password)
-and commands needing admin rights go through Ctrl+Enter: a terminal opens, the
-script runs in place, the window stays. Elevation is yours to do inside that
-terminal; the plugin never shows a UAC prompt.
+go through Ctrl+Enter: a terminal opens, the script runs in place, the window
+stays, and interaction is yours inside that terminal. Commands needing admin
+rights go through Ctrl+Shift+Enter (see above), or get elevated by you inside
+a terminal the same way. Below the run row there is also a standalone row,
+"**Run in a terminal: <command>**" (subtitle `Terminal window · it stays ·
+<shell>`), reachable with plain **Enter** for every shell — the same
+capability as Ctrl+Enter.
+
+The three execution paths at a glance:
+
+```mermaid
+flowchart LR
+    in["Search box<br/>&gt; / cmd / pwsh / bash … or the clipboard"] --> ex["Enter<br/>Run"]
+    in --> tm["Enter (terminal row) / Ctrl+Enter<br/>Run in a terminal"]
+    in --> ad["Ctrl+Shift+Enter<br/>Run as administrator"]
+    ex --> bg["Background run: live result page<br/>full output to the log · cancellable"]
+    tm --> win["Terminal window: it stays<br/>results not in the list"]
+    ad --> uac{"UAC consent?"}
+    uac -->|yes| aw["Admin window (two-stage into WT)<br/>stays · interactive · results not in the list"]
+    uac -->|no| no["Notification «UAC declined»<br/>nothing ran · no history"]
+```
 
 ## Running and results
 
@@ -151,9 +230,15 @@ terminal; the plugin never shows a UAC prompt.
   `Add to history` (only on result pages of clipboard runs) — no need to
   scroll to the end of long output to reach them.
 - At most 4 commands run concurrently; a further start reports the limit.
-  After Esc collapses the search box the command keeps running and sends a
-  system notification when done (the body names only the exit code and
-  duration, never the command or output).
+  Admin windows do not take a slot (the window owns the process); UAC requests
+  are one at a time. After Esc collapses the search box the command keeps
+  running and sends a system notification when done (the body names only the
+  exit code and duration, never the command or output).
+- Memory is bounded: only the newest 50 finished runs stay in RAM; a line over
+  4 KB is truncated in the list (the log keeps it whole); a single newline-less
+  output cannot grow the read buffer without limit. The plugin is resident and
+  never idles out, so these caps keep the host from killing it over memory or
+  an over-long output line.
 - **Encoding**: each line is tried as UTF-8 first; lines that fail fall back
   to the system OEM code page. `wsl.exe`'s own errors are UTF-16LE and decode
   too.
@@ -162,7 +247,8 @@ terminal; the plugin never shows a UAC prompt.
   multi-line clipboard script runs as-is). cmd scripts are UTF-8 + CRLF +
   `chcp 65001`; bash-family scripts are UTF-8 without BOM + LF; PowerShell
   5.1 scripts carry a BOM. Background scripts are deleted when the run ends;
-  terminal scripts are kept and cleaned up with the logs.
+  terminal and admin-window scripts (`t<timestamp>.<ext>`) are kept and cleaned
+  up with the logs.
 
 ## Settings
 
@@ -177,6 +263,8 @@ terminal; the plugin never shows a UAC prompt.
 | `customShells` | text | empty | Custom shells, see above |
 | `terminal` | choice | `wt` | Terminal for Ctrl+Enter: `wt` (falls back to conhost) / `conhost` / `mintty` (Git Bash and MSYS2 only) |
 | `clipboardConfirm` | choice | `always` | When to confirm clipboard content |
+| `adminMode` | choice | `ask` | Admin execution: `ask` allows it (entries appear, UAC prompts), `off` removes every admin entry |
+| `adminTerminal` | choice | `auto` | What hosts the admin window: `auto` follows `terminal` (two-stage into WT when it is wt), `wt` always tries the two-stage form (falls back to a console without wt), `conhost` always uses the elevated cmd's own console. Only governs admin windows; Ctrl+Enter still follows `terminal` |
 | `outputLines` | number | 50 | How many trailing output lines the result page shows (10–190) |
 | `notifyAfterSec` | number | 10 | Runs longer than this send a notification; shorter runs with the box open stay quiet |
 | `saveHistory` | bool | `true` | Whether to record history |
@@ -196,12 +284,22 @@ declares four permissions:
 
 Children run inside the plugin's job object: when the plugin is disabled or
 crashes, Win顺 ends the job and the children with it, so no orphans remain.
-Cancelling a run terminates the nested job the plugin created for it.
+Cancelling a run terminates the nested job the plugin created for it. **The
+exception is the admin window**: an elevated process cannot enter a
+normal-privilege job and takes no signals from the plugin — the window owns it,
+so quitting Win顺 lets it run to completion; the plugin neither observes nor
+interferes.
 
 This plugin **executes arbitrary commands** — that is its job; the
 `processes` permission is confirmed by the user at enable time, listed by
 Win顺. The plugin does not judge whether a command is safe; danger rules only
-warn. No `elevated` permission, no `runas`, no UAC.
+warn. No `elevated` permission, and the host never elevates on the plugin's
+behalf. Admin execution is the plugin requesting elevation for a child it
+starts itself: the UAC consent object is always the system's
+`C:\Windows\System32\cmd.exe`, the command text exists only in a script file
+inside the plugin's data folder and never on the command line, and every
+elevation needs your own click in the UAC prompt (`adminMode=off` turns the
+whole thing off).
 
 Everything lives in `WS_DATA_DIR`:
 
@@ -209,7 +307,7 @@ Everything lives in `WS_DATA_DIR`:
 |---|---|---|
 | `history.json` | History entries (shell, last exit code), 200 max, same shell + same command merged | Not written when `saveHistory` is off |
 | `runs\<id>.log` | Full output, 10 MB per file max (truncated and noted beyond that) | The most recent 50 or 7 days, whichever is fewer |
-| `runs\<id>.<ext>` | Script files | Background scripts are deleted at once when the run ends; terminal scripts follow the log rules |
+| `runs\<id>.<ext>` | Script files | Background scripts are deleted at once when the run ends; terminal and admin-window scripts (`t<timestamp>.<ext>`) follow the log rules |
 
 `history.json` is read as untrusted input: entries with wrong types or overlong
 fields are dropped, and a parse failure renames it `.bad` and starts fresh.
@@ -232,9 +330,9 @@ leaves the machine: no network calls.
 
 ## Verification
 
-- Pure-logic unit tests: 122/122 pass (input parsing, custom shell parsing,
+- Pure-logic unit tests: 151/151 pass (input parsing, custom shell parsing,
   script generation, WSL path conversion, output decoding, danger rules,
-  history, cleanup).
+  history, cleanup, the admin window wrapper, output-line truncation).
 - stdio-protocol integration tests against real shells: 19/20 pass (cmd /
   pwsh / bash / msys execution and exit codes, live per-line refresh during a
   run, cancelling the process tree, clipboard confirmation page and danger
@@ -244,10 +342,17 @@ leaves the machine: no network calls.
   design document.
 - Opening and running in a terminal was verified for all three terminal
   choices (wt / conhost / mintty).
+- With admin execution moved to an elevated terminal window, the real host
+  (wsbench) verified entry rendering, the setting switch, the normal-path
+  regression, and a 3 MB newline-less output cap smoke (the log lost not a
+  single byte, the plugin stayed alive); the real-UAC accept / decline /
+  interaction / persistence scenarios are manual acceptance — see
+  [shell-admin-verification.md](../shell-admin-verification.en.md).
 
 **Not yet verified**: keyword conflicts inside the Win顺 GUI (`>`, `cmd` and
 friends against built-in results), arrow-key selection, notification clicks,
-icons in dark and light themes.
+icons in dark and light themes, and the full chain behind a real UAC prompt
+(the manual steps live in shell-admin-verification.md).
 
 ## Failure handling
 
