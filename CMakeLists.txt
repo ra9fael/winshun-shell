@@ -9,8 +9,9 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 # it as runtime.program. Keep the ra9fael.binarylab convention.
 add_executable(shell main.cpp)
 target_compile_definitions(shell PRIVATE UNICODE _UNICODE NOMINMAX WIN32_LEAN_AND_MEAN)
-# Clipboard reads/writes live in user32; processes and files in kernel32.
-target_link_libraries(shell PRIVATE user32)
+# Clipboard reads/writes live in user32; ShellExecuteExW (admin runs) in
+# shell32; processes and files in kernel32.
+target_link_libraries(shell PRIVATE user32 shell32)
 
 if(MSVC)
     target_compile_options(shell PRIVATE /utf-8 /W4 /permissive-)

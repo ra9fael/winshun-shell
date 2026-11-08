@@ -344,6 +344,80 @@ static void testMisc()
     CHECK(quoteIfNeeded("a b") == "\"a b\"", "spaces quoted");
 }
 
+static void testAdmin()
+{
+    // Which shells the elevated path can run: the basename decides, case
+    // and folder do not (design 4).
+    CHECK(adminCapable("C:\\Windows\\System32\\cmd.exe"), "cmd can elevate");
+    CHECK(adminCapable("powershell.exe"), "windows powershell can");
+    CHECK(adminCapable("C:\\Program Files\\PowerShell\\7\\pwsh.exe"), "pwsh with spaces can");
+    CHECK(adminCapable("c:\\tools\\PWSH.EXE"), "basename case does not matter");
+    CHECK(!adminCapable("C:\\Program Files\\Git\\bin\\bash.exe"), "bash cannot");
+    CHECK(!adminCapable("C:\\Windows\\System32\\wsl.exe"), "wsl cannot");
+    CHECK(!adminCapable("cmd.com"), "a different extension cannot");
+    CHECK(!adminCapable(""), "empty cannot");
+
+    // The wrapper: /k leaves the console open after the command (direct
+    // form), /c is the two-stage form (launch wt and exit). /s strips only
+    // the outer quote pair so the inner line keeps its own quotes; no NUL and
+    // no redirect (the window shows the output and has real stdin).
+    CHECK(buildAdminWindowParams("\"C:\\r\\1.cmd\"", true) == "/d /s /k \"\"C:\\r\\1.cmd\"\"",
+          "a cmd script sits inside the /s quote sandwich, /k keeps the window");
+    CHECK(buildAdminWindowParams("\"C:\\r\\1.cmd\"", false) == "/d /s /c \"\"C:\\r\\1.cmd\"\"",
+          "the two-stage form uses /c: the outer cmd exits after wt starts");
+    const std::string pwshInner = "\"C:\\Program Files\\PowerShell\\7\\pwsh.exe\" -NoLogo -NoExit "
+                                  "-ExecutionPolicy Bypass -File \"C:\\dir with space\\1.ps1\"";
+    const std::string wrapped = buildAdminWindowParams(pwshInner, true);
+    CHECK(wrapped == "/d /s /k \"" + pwshInner + "\"", "the whole inner line is wrapped verbatim");
+    CHECK(wrapped.find("-NoExit") != std::string::npos, "PowerShell stays interactive");
+    CHECK(wrapped.find("< NUL") == std::string::npos, "no NUL: the window has real stdin");
+    CHECK(wrapped.find("2>&1") == std::string::npos, "no redirect: the window shows the output");
+
+    // wt's semicolon splitting: the escape applies everywhere in the line.
+    CHECK(wtEscape("plain") == "plain", "nothing to escape");
+    CHECK(wtEscape("a;b") == "a\\;b", "a semicolon becomes backslash-semicolon");
+    CHECK(wtEscape("\"C:\\a;b\\1.cmd\" /d /k") == "\"C:\\a\\;b\\1.cmd\" /d /k",
+          "semicolons inside quoted paths are escaped too");
+
+    // Known FNV-1a 64 vectors; the script hash re-check depends on them.
+    CHECK(fnv1a64("") == 0xcbf29ce484222325ULL, "fnv-1a 64 of the empty string");
+    CHECK(fnv1a64("a") == 0xaf63dc4c8601ec8cULL, "fnv-1a 64 of \"a\"");
+    CHECK(fnv1a64("foobar") == 0x85944171f73967e8ULL, "fnv-1a 64 of \"foobar\"");
+
+    // The setting falls back to ask on anything but the two named values.
+    CHECK(adminModeOrDefault("ask") == "ask", "ask stays");
+    CHECK(adminModeOrDefault("off") == "off", "off stays");
+    CHECK(adminModeOrDefault("always") == "ask", "an unknown value falls back");
+    CHECK(adminModeOrDefault("") == "ask", "empty falls back");
+    CHECK(adminModeOrDefault("OFF") == "ask", "the value is case-sensitive");
+
+    // The admin window host: the three named values stay, anything else
+    // falls back to auto.
+    CHECK(adminTerminalOrDefault("auto") == "auto", "auto stays");
+    CHECK(adminTerminalOrDefault("wt") == "wt", "wt stays");
+    CHECK(adminTerminalOrDefault("conhost") == "conhost", "conhost stays");
+    CHECK(adminTerminalOrDefault("mintty") == "auto", "an unknown value falls back");
+    CHECK(adminTerminalOrDefault("") == "auto", "empty falls back");
+    CHECK(adminTerminalOrDefault("WT") == "auto", "the value is case-sensitive");
+}
+
+static void testLineCap()
+{
+    // The ring keeps at most kMaxLineBytes of any line; the log keeps the rest.
+    CHECK(truncateLine("short", 4096) == "short", "a line under the cap is untouched");
+    CHECK(truncateLine("12345", 5) == "12345", "exactly at the cap is untouched");
+    const std::string big(10000, 'x');
+    const std::string capped = truncateLine(big, 4096);
+    CHECK(capped.size() < big.size(), "an over-long line is shortened");
+    CHECK(capped.compare(0, 4096, big, 0, 4096) == 0, "the head is preserved");
+    CHECK(capped.find("truncated") != std::string::npos, "the cut is marked");
+    CHECK(capped.find("log") != std::string::npos, "the mark points to the log");
+    const std::string cjk = "中文中文中文中文"; // 8 chars, 24 bytes
+    const std::string cut = truncateLine(cjk, 10);
+    CHECK(wellFormedUtf8(cut), "the kept prefix stays well-formed UTF-8");
+    CHECK(cut.compare(0, 9, cjk, 0, 9) == 0, "cut backs off to a code-point boundary");
+}
+
 int main()
 {
     testParseInput();
@@ -356,6 +430,8 @@ int main()
     testHistory();
     testCleanup();
     testMisc();
+    testAdmin();
+    testLineCap();
     std::printf("shell logic tests: %d/%d passed\n", g_total - g_failed, g_total);
     return g_failed == 0 ? 0 : 1;
 }

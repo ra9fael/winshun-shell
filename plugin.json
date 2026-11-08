@@ -3,8 +3,8 @@
   "manifest": 1,
   "id": "ra9fael.shell",
   "name": {"zh": "命令执行", "en": "Quick Shell"},
-  "version": "0.1.0",
-  "description": "在搜索框里执行 shell 命令：手动输入或直接执行剪贴板内容，支持 cmd、PowerShell、Git Bash、MSYS2、WSL 和自定义 shell；结果在列表里实时刷新，Ctrl+Enter 在终端里打开。",
+  "version": "0.2.0",
+  "description": "在搜索框里执行 shell 命令：手动输入或直接执行剪贴板内容，支持 cmd、PowerShell、Git Bash、MSYS2、WSL 和自定义 shell；普通命令结果在列表里实时刷新，Ctrl+Enter 在终端里打开；可经 UAC 确认以管理员在终端窗口执行（仅 cmd 和 PowerShell，窗口跑完留存）。",
   "author": "ra9fael",
   "license": "MIT",
   "permissions": ["processes", "clipboard:read", "clipboard:write", "notifications"],
@@ -86,6 +86,22 @@
       "options": ["always", "multiline", "never"]
     },
     {
+      "key": "adminMode",
+      "type": "choice",
+      "title": {"zh": "管理员执行", "en": "Admin execution"},
+      "hint": {"zh": "以管理员执行命令时弹 UAC 确认，在终端窗口里运行（仅 cmd 和 PowerShell，跑完窗口留存、可交互，结果不进列表）；ask 允许，off 关闭入口", "en": "Show a UAC prompt and run in a terminal window (cmd and PowerShell only; the window stays and is interactive, results do not return to the list); ask allows it, off removes the entry"},
+      "default": "ask",
+      "options": ["ask", "off"]
+    },
+    {
+      "key": "adminTerminal",
+      "type": "choice",
+      "title": {"zh": "管理员窗口", "en": "Admin window"},
+      "hint": {"zh": "管理员窗口的宿主：auto 跟随「终端程序」（wt 时二段式进 Windows Terminal）；wt 永远二段式（wt 没装回退控制台）；conhost 永远用提权 cmd 自己的控制台。只管管理员窗口，Ctrl+Enter 仍看「终端程序」", "en": "What hosts the admin window: auto follows the terminal setting (two-stage into WT when it is wt); wt always tries the two-stage form (falls back to a console without wt); conhost always uses the elevated cmd's own console. Only governs admin windows; Ctrl+Enter still follows the terminal setting"},
+      "default": "auto",
+      "options": ["auto", "wt", "conhost"]
+    },
+    {
       "key": "outputLines",
       "type": "number",
       "title": {"zh": "输出行数", "en": "Output lines"},
@@ -115,6 +131,7 @@
       "hint": {"zh": "例如 > ls -la · @ 列出其他 shell · # 查看运行结果", "en": "e.g. > ls -la · @ lists shells · # shows run results"},
       "actions": [
         {"id": "execute", "title": {"zh": "执行", "en": "Run"}, "key": "Enter"},
+        {"id": "executeAdmin", "title": {"zh": "以管理员执行", "en": "Run as administrator"}, "key": "Ctrl+Shift+Enter"},
         {"id": "openTerminal", "title": {"zh": "在终端里执行", "en": "Run in a terminal"}, "key": "Ctrl+Enter"},
         {"id": "edit", "title": {"zh": "改写命令", "en": "Edit the command"}, "key": "Shift+Enter"},
         {"id": "copyCommand", "title": {"zh": "复制命令", "en": "Copy command"}, "key": ""},
@@ -128,6 +145,7 @@
       "hint": {"zh": "cmd dir · 按空格输入命令 · # 查看运行结果", "en": "cmd dir · press space, then type · # shows run results"},
       "actions": [
         {"id": "execute", "title": {"zh": "执行", "en": "Run"}, "key": "Enter"},
+        {"id": "executeAdmin", "title": {"zh": "以管理员执行", "en": "Run as administrator"}, "key": "Ctrl+Shift+Enter"},
         {"id": "openTerminal", "title": {"zh": "在终端里执行", "en": "Run in a terminal"}, "key": "Ctrl+Enter"},
         {"id": "edit", "title": {"zh": "改写命令", "en": "Edit the command"}, "key": "Shift+Enter"},
         {"id": "copyCommand", "title": {"zh": "复制命令", "en": "Copy command"}, "key": ""},
@@ -141,6 +159,7 @@
       "hint": {"zh": "pwsh Get-Process · 按空格输入命令 · # 查看运行结果", "en": "pwsh Get-Process · press space, then type · # shows run results"},
       "actions": [
         {"id": "execute", "title": {"zh": "执行", "en": "Run"}, "key": "Enter"},
+        {"id": "executeAdmin", "title": {"zh": "以管理员执行", "en": "Run as administrator"}, "key": "Ctrl+Shift+Enter"},
         {"id": "openTerminal", "title": {"zh": "在终端里执行", "en": "Run in a terminal"}, "key": "Ctrl+Enter"},
         {"id": "edit", "title": {"zh": "改写命令", "en": "Edit the command"}, "key": "Shift+Enter"},
         {"id": "copyCommand", "title": {"zh": "复制命令", "en": "Copy command"}, "key": ""},

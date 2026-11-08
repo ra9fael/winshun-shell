@@ -384,6 +384,78 @@ inline std::string quoteAlways(const std::string& path)
     return "\"" + path + "\"";
 }
 
+// ---- admin execution (shell-admin-design.md 4) --------------------------------------
+
+// Whether the shell's program can be driven through the elevated wrapper: only
+// the trusted system shells, matched by basename. bash/msys/wsl and any other
+// program get no admin entry.
+inline bool adminCapable(const std::string& program)
+{
+    const std::size_t slash = program.find_last_of("/\\");
+    const std::string file = slash == std::string::npos ? program : program.substr(slash + 1);
+    const std::string exe = lower(file);
+    return exe == "cmd.exe" || exe == "pwsh.exe" || exe == "powershell.exe";
+}
+
+// FNV-1a 64. Not cryptographic: it detects the script being rewritten in the
+// window between pressing Enter and clicking the UAC dialog
+// (shell-admin-design.md 7 R7) and shrinks that window to milliseconds.
+inline unsigned long long fnv1a64(const std::string& s)
+{
+    unsigned long long h = 0xcbf29ce484222325ULL;
+    for (const char c : s) {
+        h ^= static_cast<unsigned char>(c);
+        h *= 0x100000001b3ULL;
+    }
+    return h;
+}
+
+// The parameters of the elevated cmd.exe. keepOpen=/k leaves the console open
+// after the command (the direct form: the window hosts the payload itself);
+// /c is the two-stage form: the elevated cmd launches wt and exits right
+// after, and the WT window owns the payload. The consent object is the system
+// cmd either way. /S strips the outermost quote pair only, so the inner command
+// line keeps its own quotes. No < NUL and no redirection: the window has real
+// stdin (interactive commands work) and shows the output itself, so nothing
+// depends on the plugin outliving the run.
+inline std::string buildAdminWindowParams(const std::string& innerCommandLine, bool keepOpen)
+{
+    return keepOpen ? "/d /s /k \"" + innerCommandLine + "\""
+                    : "/d /s /c \"" + innerCommandLine + "\"";
+}
+
+// wt splits its command line on `;` even inside quotes, so every semicolon
+// (a `;` in a path, an `exec bash -l` handover) must be escaped as `\;` or wt
+// launches the tail as a second command and fails with 0x80070002.
+inline std::string wtEscape(const std::string& s)
+{
+    std::string out;
+    out.reserve(s.size());
+    for (const char c : s) {
+        if (c == ';')
+            out += "\\;";
+        else
+            out += c;
+    }
+    return out;
+}
+
+// The accepted values of the adminMode setting; anything else falls back to
+// ask (the setting hint names only these two).
+inline std::string adminModeOrDefault(const std::string& value)
+{
+    return value == "ask" || value == "off" ? value : "ask";
+}
+
+// The accepted values of the adminTerminal setting (which host the elevated
+// window uses): auto follows `terminal` (wt → two-stage into WT), wt always
+// tries the two-stage form, conhost always opens the elevated cmd's own
+// console. Anything else falls back to auto.
+inline std::string adminTerminalOrDefault(const std::string& value)
+{
+    return value == "auto" || value == "wt" || value == "conhost" ? value : "auto";
+}
+
 // The command line for a custom shell: {script} → scriptPath, {wslscript} →
 // wslScriptPath; no placeholder → the script path appended last. Substituted
 // paths are quoted when they contain spaces.
@@ -708,6 +780,21 @@ inline std::string collapseCarriageReturns(const std::string& s)
         start = end;
     }
     return out;
+}
+
+// A display/storage cap for one output line. The full line still goes to the
+// log; this bounds the ring buffer (the manifest's memoryMB) and any single
+// JSON row (the host kills a plugin whose stdout line passes 16 MB). Cuts on a
+// UTF-8 boundary so a CJK character is never split, and marks the cut so the
+// reader knows the log has the rest.
+inline std::string truncateLine(const std::string& s, std::size_t maxBytes)
+{
+    if (s.size() <= maxBytes)
+        return s;
+    std::size_t cut = maxBytes;
+    while (cut > 0 && (static_cast<unsigned char>(s[cut]) & 0xC0) == 0x80)
+        --cut; // back off continuation bytes to the boundary code point's lead
+    return s.substr(0, cut) + "… [line truncated; full output in the log]";
 }
 
 // A UTF-8 code point at s[i]; false on malformed input.

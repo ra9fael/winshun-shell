@@ -13,6 +13,7 @@
 #include "winshun.h"
 
 #include <windows.h>
+#include <shellapi.h>
 
 #include <atomic>
 #include <algorithm>
@@ -154,6 +155,24 @@ inline bool writeScriptFile(const std::string& path, const std::string& bytes)
     return ok;
 }
 
+// The whole file's bytes; empty when it cannot be read. Shares everything so a
+// log file being written by another process stays readable.
+inline std::string readFileBytes(const std::string& path)
+{
+    HANDLE f = ::CreateFileW(winshun::wide(path).c_str(), GENERIC_READ,
+                             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr,
+                             OPEN_EXISTING, 0, nullptr);
+    if (f == INVALID_HANDLE_VALUE)
+        return {};
+    std::string out;
+    char chunk[16 * 1024];
+    DWORD got = 0;
+    while (::ReadFile(f, chunk, sizeof chunk, &got, nullptr) && got > 0)
+        out.append(chunk, got);
+    ::CloseHandle(f);
+    return out;
+}
+
 // Runs a program and captures its output (short probes only, e.g. wsl -l -q).
 // The process is killed after `timeoutMs` so detection cannot hang.
 inline std::string runCapture(const std::string& commandLine, DWORD timeoutMs)
@@ -234,6 +253,8 @@ struct Settings {
     std::string customShells;
     std::string terminal = "wt";
     std::string clipboardConfirm = "always";
+    std::string adminMode = "ask";
+    std::string adminTerminal = "auto";
     int outputLines = 50;
     int notifyAfterSec = 10;
     bool saveHistory = true;
@@ -260,6 +281,8 @@ inline Settings readSettings(const winshun::Json& s)
     st.customShells = str("customShells", "");
     st.terminal = str("terminal", "wt");
     st.clipboardConfirm = str("clipboardConfirm", "always");
+    st.adminMode = adminModeOrDefault(str("adminMode", "ask"));
+    st.adminTerminal = adminTerminalOrDefault(str("adminTerminal", "auto"));
     st.outputLines = num("outputLines", 50, 10, 190);
     st.notifyAfterSec = num("notifyAfterSec", 10, 0, 3600);
     st.saveHistory = s["saveHistory"].toBool(true);
@@ -333,6 +356,13 @@ inline Detection detectShells(const Settings& st)
 constexpr std::size_t kMaxKeptLines = 200;
 constexpr long long kMaxLogBytes = 10 * 1024 * 1024;
 constexpr std::size_t kMaxConcurrentRuns = 4;
+// The process is long-lived (idleExitSec 0) and the host may restart it at any
+// time, so memory is bounded: only the newest finished runs stay in RAM, each
+// line is capped, and a single newline-less line cannot grow the read buffer
+// without limit (memoryMB / the 16 MB stdout-line watchdog).
+constexpr std::size_t kMaxKeptRuns = 50;
+constexpr std::size_t kMaxLineBytes = 4096;
+constexpr std::size_t kMaxPendingBytes = 1024 * 1024;
 
 struct OutputLine {
     std::string text;
@@ -366,6 +396,21 @@ struct RunState {
 };
 
 enum class StartError { Ok, ShellMissing, Busy, SpawnFailed };
+
+// The background command line for one run: the shell program, its arguments
+// and the quoted script path ({script}/{wslscript} substituted for custom
+// shells). Shared by the normal and the admin start.
+inline std::string runCommandLine(const std::string& program, const std::string& backgroundArgs,
+                                  const std::string& scriptExt, const std::string& scriptPath)
+{
+    if (backgroundArgs.find("{script}") != std::string::npos
+        || backgroundArgs.find("{wslscript}") != std::string::npos) {
+        const CustomShell sh {"", program, backgroundArgs, scriptExt,
+                              backgroundArgs.find("{wslscript}") != std::string::npos};
+        return customShellCommandLine(sh, scriptPath, toWslPath(scriptPath).value_or(scriptPath));
+    }
+    return "\"" + program + "\" " + backgroundArgs + " \"" + scriptPath + "\"";
+}
 
 class RunManager {
 public:
@@ -420,6 +465,24 @@ public:
         if (runningCount >= kMaxConcurrentRuns)
             return StartError::Busy;
 
+        // Bound memory: drop the oldest finished runs beyond the cap (running
+        // runs always stay). This process is long-lived and the host may
+        // restart it at any time, so finished runs must not pile up in RAM;
+        // their logs remain on disk.
+        std::size_t finished = 0;
+        for (const auto& [id, s] : m_runs)
+            if (!s->running)
+                ++finished;
+        for (auto it = m_order.begin(); it != m_order.end() && finished > kMaxKeptRuns; ) {
+            if (m_runs.at(*it)->running) {
+                ++it;
+            } else {
+                m_runs.erase(*it);
+                it = m_order.erase(it);
+                --finished;
+            }
+        }
+
         const long long id = newRunId(epochSeconds(), m_counter++);
         auto state = std::make_shared<RunState>();
         state->id = id;
@@ -445,14 +508,8 @@ public:
         // cmd line: the shell's arguments with the script path last, unless a
         // custom shell placed {script} itself (then backgroundArgs holds the
         // ready line).
-        std::string cmdLine;
-        if (backgroundArgs.find("{script}") != std::string::npos
-            || backgroundArgs.find("{wslscript}") != std::string::npos)
-            cmdLine = customShellCommandLine({"", program, backgroundArgs, script.ext,
-                                              backgroundArgs.find("{wslscript}") != std::string::npos},
-                                             state->scriptPath, toWslPath(state->scriptPath).value_or(state->scriptPath));
-        else
-            cmdLine = "\"" + program + "\" " + backgroundArgs + " \"" + state->scriptPath + "\"";
+        const std::string cmdLine = runCommandLine(program, backgroundArgs, script.ext,
+                                                   state->scriptPath);
 
         // spawn must not lock m_mutex itself: start() already holds it here,
         // and std::mutex is not recursive (a nested lock self-deadlocks).
@@ -607,16 +664,42 @@ private:
     void reader(const std::shared_ptr<RunState>& state, HANDLE pipe, bool isErr, HANDLE logHandle)
     {
         std::string buffer;
+        bool discarding = false; // inside a newline-less line already over the cap
         char chunk[16 * 1024];
         DWORD got = 0;
         for (;;) {
             if (!::ReadFile(pipe, chunk, sizeof chunk, &got, nullptr) || got == 0)
                 break;
-            buffer.append(chunk, got);
+            if (discarding) {
+                std::size_t nl = std::string::npos;
+                for (std::size_t i = 0; i < got; ++i)
+                    if (chunk[i] == '\n') { nl = i; break; }
+                // Out of the ring, but the log keeps the whole line.
+                const std::size_t keep = nl == std::string::npos ? got : nl + 1;
+                const std::string tail = decodeChunk(std::string(chunk, keep), oemToUtf8);
+                {
+                    std::lock_guard lock(state->mutex);
+                    logText(state, tail, logHandle);
+                }
+                if (nl == std::string::npos)
+                    continue; // still the same over-long line
+                buffer.assign(chunk + nl + 1, got - nl - 1);
+                discarding = false;
+            } else {
+                buffer.append(chunk, got);
+            }
             const LineSplit split = splitCompleteLines(buffer);
             buffer = split.rest;
             if (!split.complete.empty())
                 emit(state, split.complete, isErr, logHandle);
+            if (buffer.size() > kMaxPendingBytes) {
+                // One line longer than the cap: emit logs it whole and keeps
+                // only the head in the ring; the rest of the line goes to the
+                // log alone so the buffer cannot grow unbounded.
+                emit(state, buffer + "\n", isErr, logHandle);
+                buffer.clear();
+                discarding = true;
+            }
         }
         if (!buffer.empty())
             emit(state, buffer + "\n", isErr, logHandle); // a final line without \n
@@ -646,22 +729,13 @@ private:
             return;
         {
             std::lock_guard lock(state->mutex);
-            // Log the lines first: the second loop moves them into the ring
-            // buffer, which leaves the texts empty.
-            for (const OutputLine& line : fresh) {
-                std::string row = line.text + "\n";
-                if (state->logBytes + row.size() > kMaxLogBytes) {
-                    if (!state->logTruncated) {
-                        state->logTruncated = true;
-                        const std::string note = "... log truncated ...\n";
-                        writeLog(logHandle, note, state->logBytes);
-                    }
-                    continue;
-                }
-                writeLog(logHandle, row, state->logBytes);
-            }
+            // Log the full lines first: the second loop truncates and moves
+            // them into the ring buffer, which leaves the texts empty.
+            for (const OutputLine& line : fresh)
+                logText(state, line.text + "\n", logHandle);
             for (OutputLine& line : fresh) {
                 line.seq = state->nextSeq++;
+                line.text = truncateLine(line.text, kMaxLineBytes); // the log keeps the full line
                 state->lines.push_back(std::move(line));
                 if (state->lines.size() > kMaxKeptLines)
                     state->lines.pop_front();
@@ -669,6 +743,19 @@ private:
         }
         if (m_onUpdate)
             m_onUpdate();
+    }
+
+    // Appends to the log under the size budget; the caller holds state->mutex.
+    static void logText(const std::shared_ptr<RunState>& state, const std::string& text, HANDLE logHandle)
+    {
+        if (state->logBytes + static_cast<long long>(text.size()) > kMaxLogBytes) {
+            if (!state->logTruncated) {
+                state->logTruncated = true;
+                writeLog(logHandle, "... log truncated ...\n", state->logBytes);
+            }
+            return;
+        }
+        writeLog(logHandle, text, state->logBytes);
     }
 
     static void writeLog(HANDLE logHandle, const std::string& row, long long& logBytes)
@@ -939,21 +1026,8 @@ inline std::string openInTerminal(const Settings& st, const Detection& det,
     const std::string mintty = st.terminal == "mintty" && shLike ? minttyFor(spec.program)
                                                                  : std::string();
     if (!wt.empty()) {
-        // wt splits its command line on `;` even inside quotes, so every
-        // semicolon (the `exec bash -l` handover, a `;` in a path) must be
-        // escaped as `\;` or wt launches the tail as a second command and
-        // fails with 0x80070002.
-        const auto wtEscape = [](const std::string& s) {
-            std::string out;
-            out.reserve(s.size());
-            for (const char c : s) {
-                if (c == ';')
-                    out += "\\;";
-                else
-                    out += c;
-            }
-            return out;
-        };
+        // The `;` escaping lives in logic.h (wtEscape): wt splits its command
+        // line on `;` even inside quotes.
         cmdLine = "\"" + wt + "\" -d \"" + wtEscape(workDir) + "\" " + wtEscape(shellArgs);
     } else if (!mintty.empty()) {
         cmdLine = "\"" + mintty + "\" --dir \"" + workDir + "\" " + shellArgs;
@@ -980,6 +1054,115 @@ inline std::string openInTerminal(const Settings& st, const Detection& det,
     ::CloseHandle(pi.hProcess);
     ::CloseHandle(pi.hThread);
     return {};
+}
+
+// The outcome of an admin window request. ShellExecuteExW blocks while the UAC
+// dialog is up, so the caller runs openAdminWindow on a worker thread - never
+// the protocol thread, or queries would freeze under the secure desktop and
+// the host would restart the plugin for hanging.
+struct AdminWindowResult {
+    bool started = false;
+    bool denied = false;   // the user declined the UAC dialog (1223)
+    long long error = 0;   // any other failure's Win32 error code
+    std::string message;   // a setup failure (shell/script), when neither started nor denied
+};
+
+// Run a command in an elevated console window that stays open (cmd /k). The
+// consent object is always the system's cmd.exe, never a detected path; the
+// command text lives in a script file re-checked right before consent (R7).
+// The window owns the process: it outlives this plugin, shows the output and
+// has real stdin, so there is nothing to tail, cancel or recover here.
+inline AdminWindowResult openAdminWindow(const Settings& st, const Detection& det,
+                                         const std::string& shellName, const std::string& command,
+                                         const std::string& runsDir, const std::string& workDir)
+{
+    AdminWindowResult result;
+    const ShellSpec spec = shellSpec(st, det, shellName, workDir);
+    if (!spec.valid) {
+        result.message = "shell not found";
+        return result;
+    }
+    if (!adminCapable(spec.program)) {
+        result.message = "this shell cannot run as administrator";
+        return result;
+    }
+
+    const std::string name = lower(shellName);
+    const ScriptSpec script = scriptFor(name, command);
+    ::CreateDirectoryW(winshun::wide(runsDir).c_str(), nullptr);
+    const std::string scriptPath = runsDir + "\\t" + std::to_string(tickMs()) + script.ext;
+    const std::string bytes = scriptBytes(script);
+    if (!writeScriptFile(scriptPath, bytes)) {
+        result.message = "cannot write the script";
+        return result;
+    }
+
+    // Re-read right before consenting: a same-privilege program could have
+    // swapped the script after our write (R7). One rewrite retry shrinks the
+    // race to milliseconds.
+    const unsigned long long hash = fnv1a64(bytes);
+    if (fnv1a64(readFileBytes(scriptPath)) != hash
+        && (!writeScriptFile(scriptPath, bytes) || fnv1a64(readFileBytes(scriptPath)) != hash)) {
+        result.message = "script re-check failed";
+        return result;
+    }
+
+    // The payload: what actually runs the script and keeps its window open.
+    // For cmd the script runs in a cmd /d /k; for PowerShell the shell is
+    // launched with -NoExit so the window stays interactive after the script.
+    const std::string payload = name == kCmd
+        ? quoteAlways(spec.program) + " /d /k " + quoteAlways(scriptPath)
+        : quoteAlways(spec.program) + " -NoLogo -NoExit -ExecutionPolicy Bypass -File "
+              + quoteAlways(scriptPath);
+
+    // Two-stage handoff: the OS does not host elevated consoles in Windows
+    // Terminal (measured: the default-terminal setting skips elevated
+    // clients), so when wt is wanted and found, the elevated cmd /c launches
+    // wt itself and exits right away - only the WT window shows. cmd does not
+    // wait for a GUI executable, so the outer console closes at once. Without
+    // wt the elevated cmd /k hosts the payload in its own console.
+    std::string inner;
+    bool keepOpen = true;
+    const std::string wantTerminal = adminTerminalOrDefault(st.adminTerminal);
+    const bool tryWt = wantTerminal == "wt" || (wantTerminal == "auto" && st.terminal == "wt");
+    if (tryWt) {
+        const std::string wt = findOnPath(L"wt.exe");
+        if (!wt.empty()) {
+            inner = quoteAlways(wt) + " -d \"" + wtEscape(workDir) + "\" " + wtEscape(payload);
+            keepOpen = false;
+        }
+    }
+    if (inner.empty()) {
+        inner = name == kCmd ? quoteAlways(scriptPath) : payload;
+        keepOpen = true;
+    }
+
+    wchar_t sysDir[MAX_PATH];
+    ::GetSystemDirectoryW(sysDir, MAX_PATH);
+    const std::wstring cmdExe = std::wstring(sysDir) + L"\\cmd.exe";
+    const std::wstring params = winshun::wide(buildAdminWindowParams(inner, keepOpen));
+    const std::wstring dir = winshun::wide(workDir);
+
+    SHELLEXECUTEINFOW sei {};
+    sei.cbSize = sizeof sei;
+    sei.fMask = SEE_MASK_NOCLOSEPROCESS;
+    sei.lpVerb = L"runas";
+    sei.lpFile = cmdExe.c_str();
+    sei.lpParameters = params.c_str();
+    sei.lpDirectory = dir.c_str();
+    sei.nShow = SW_SHOWNORMAL;
+    if (!::ShellExecuteExW(&sei)) {
+        const DWORD error = ::GetLastError();
+        if (error == ERROR_CANCELLED)
+            result.denied = true;
+        else
+            result.error = static_cast<long long>(error);
+        return result;
+    }
+    if (sei.hProcess)
+        ::CloseHandle(sei.hProcess); // the window owns the process, not us
+    result.started = true;
+    return result;
 }
 
 } // namespace shellplug

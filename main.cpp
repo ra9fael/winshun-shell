@@ -93,7 +93,8 @@ std::string runStatusTitle(bool zh, const RunState& s, bool full = true)
         return tr(zh, "已取消 · ", "Cancelled · ") + formatSeconds(secs);
     if (!full)
         return tr(zh, "退出码 ", "Exit ") + std::to_string(s.exitCode);
-    return tr(zh, "退出码 ", "Exit code ") + std::to_string(s.exitCode) + " · " + formatSeconds(secs);
+    return tr(zh, "退出码 ", "Exit code ") + std::to_string(s.exitCode) + " · "
+           + formatSeconds(secs);
 }
 
 const char* runIcon(const RunState& s)
@@ -229,6 +230,12 @@ public:
             if (kind == "clipboardConfirm" || kind == "command" || kind == "history" || kind == "rerun")
                 return startRun(a.command, shell, command, kind == "clipboardConfirm", st, det, zh);
         }
+        if (a.action == "executeAdmin") {
+            // The elevated path: a System32 cmd.exe consent object opens a
+            // terminal window that keeps the result; nothing returns to the list.
+            if (kind == "adminCommand" || kind == "command" || kind == "history" || kind == "rerun")
+                return startAdminRun(shell, command, st, det, zh);
+        }
         return Plugin::action(a);
     }
 
@@ -299,7 +306,7 @@ private:
         const ParsedInput p = parseInput(q.text);
 
         if (p.kind == ParsedInput::Kind::ResultPage)
-            return resultPage(p.runId, st, zh);
+            return resultPage(p.runId, st, det, zh);
         if (p.kind == ParsedInput::Kind::ShellList
             || (p.kind == ParsedInput::Kind::ShellRequest && trim(p.command).empty()))
             return shellList(q, det, zh);
@@ -319,13 +326,13 @@ private:
             return items;
         }
         Items items;
-        appendCommandRows(items, runShell, trim(p.command), st, zh);
+        appendCommandRows(items, runShell, trim(p.command), st, det, zh);
         return items;
     }
 
     // The rows for a command about to run: warnings, the run row, history.
     void appendCommandRows(Items& items, const std::string& shell, const std::string& command,
-                           const Settings& st, const bool zh)
+                           const Settings& st, const Detection& det, const bool zh)
     {
         if (shell.empty()) {
             items.push_back(Item("noShell", tr(zh, "没有检测到可用的 shell", "No usable shell detected"),
@@ -338,16 +345,54 @@ private:
             items.push_back(Item("danger." + rule, dangerTitle(zh, rule),
                                  tr(zh, "确认后再执行", "Check before running"))
                                 .invalid());
+        // The admin entry exists for cmd / PowerShell shells only, and only
+        // while the setting allows it (R11); bash/msys/wsl reruns stay normal
+        // (R12).
+        const bool capable = st.adminMode != "off"
+                             && adminCapable(programOfShell(det, shell));
         std::string detail = shellTitle(zh, shell);
         if (!st.workDir.empty())
             detail += " · " + firstLineOf(st.workDir, 40);
+        {
+            std::vector<Action> runActions {{"execute", tr(zh, "执行", "Run"), "Enter"}};
+            if (capable)
+                runActions.push_back({"executeAdmin", tr(zh, "以管理员执行", "Run as administrator"),
+                                      "Ctrl+Shift+Enter"});
+            runActions.push_back({"openTerminal", tr(zh, "在终端里执行", "Run in a terminal"), "Ctrl+Enter"});
+            runActions.push_back({"edit", tr(zh, "改写命令", "Edit the command"), "Shift+Enter"});
+            runActions.push_back({"copyCommand", tr(zh, "复制命令", "Copy command"), ""});
+            items.push_back(
+                Item("run", tr(zh, "执行：", "Run: ") + firstLineOf(command, 80), detail)
+                    .withActions(std::move(runActions))
+                    .withData(Json::Object {{"kind", "command"}, {"shell", shell}, {"command", command}}));
+        }
+        if (capable) {
+            // The standalone row: Enter triggers the UAC prompt from the
+            // keyboard alone; the command runs in a terminal window that stays.
+            items.push_back(
+                Item("admin", tr(zh, "以管理员执行：", "Run as administrator: ") + firstLineOf(command, 80),
+                     tr(zh, "UAC 确认 · 终端窗口 · ", "UAC prompt · terminal window · ")
+                         + shellTitle(zh, shell))
+                    .withActions({{"executeAdmin", tr(zh, "以管理员执行", "Run as administrator"), "Enter"},
+                                  {"openTerminal", tr(zh, "在终端里执行", "Run in a terminal"), "Ctrl+Enter"},
+                                  {"edit", tr(zh, "改写命令", "Edit the command"), "Shift+Enter"},
+                                  {"copyCommand", tr(zh, "复制命令", "Copy command"), ""}})
+                    .withData(Json::Object {{"kind", "adminCommand"},
+                                            {"shell", shell},
+                                            {"command", command}}));
+        }
+        // The terminal row: the same window Ctrl+Enter opens, but reachable
+        // with plain Enter like the admin row, for every shell.
         items.push_back(
-            Item("run", tr(zh, "执行：", "Run: ") + firstLineOf(command, 80), detail)
-                .withActions({{"execute", tr(zh, "执行", "Run"), "Enter"},
-                              {"openTerminal", tr(zh, "在终端里执行", "Run in a terminal"), "Ctrl+Enter"},
+            Item("terminal", tr(zh, "在终端执行：", "Run in a terminal: ") + firstLineOf(command, 80),
+                 tr(zh, "终端窗口 · 窗口留存 · ", "Terminal window · it stays · ")
+                     + shellTitle(zh, shell))
+                .withActions({{"openTerminal", tr(zh, "在终端里执行", "Run in a terminal"), "Enter"},
                               {"edit", tr(zh, "改写命令", "Edit the command"), "Shift+Enter"},
                               {"copyCommand", tr(zh, "复制命令", "Copy command"), ""}})
-                .withData(Json::Object {{"kind", "command"}, {"shell", shell}, {"command", command}}));
+                .withData(Json::Object {{"kind", "terminalCommand"},
+                                        {"shell", shell},
+                                        {"command", command}}));
         {
             const std::lock_guard lock(m_stateMutex);
             std::size_t shown = 0;
@@ -355,14 +400,18 @@ private:
                 if (e.command == command)
                     continue;
                 ++shown;
+                std::vector<Action> hActions {{"execute", tr(zh, "执行", "Run"), "Enter"}};
+                if (st.adminMode != "off" && adminCapable(programOfShell(det, e.shell)))
+                    hActions.push_back({"executeAdmin", tr(zh, "以管理员执行", "Run as administrator"),
+                                        "Ctrl+Shift+Enter"});
+                hActions.push_back({"openTerminal", tr(zh, "在终端里执行", "Run in a terminal"), "Ctrl+Enter"});
+                hActions.push_back({"edit", tr(zh, "改写命令", "Edit the command"), "Shift+Enter"});
+                hActions.push_back({"deleteHistory", tr(zh, "从历史中删除", "Delete from history"), ""});
                 items.push_back(
                     Item("history." + std::to_string(shown), firstLineOf(e.command, 80),
                          shellTitle(zh, e.shell) + " · " + tr(zh, "用过 ", "used ")
                              + std::to_string(e.count) + tr(zh, " 次", "×"))
-                        .withActions({{"execute", tr(zh, "执行", "Run"), "Enter"},
-                                      {"openTerminal", tr(zh, "在终端里执行", "Run in a terminal"), "Ctrl+Enter"},
-                                      {"edit", tr(zh, "改写命令", "Edit the command"), "Shift+Enter"},
-                                      {"deleteHistory", tr(zh, "从历史中删除", "Delete from history"), ""}})
+                        .withActions(std::move(hActions))
                         .withData(Json::Object {{"kind", "history"},
                                                 {"shell", e.shell},
                                                 {"command", e.command}}));
@@ -543,8 +592,10 @@ private:
         return items;
     }
 
-    // `bash #` / `bash #r42` (design 6).
-    Items resultPage(long long runId, const Settings& st, const bool zh)
+    // `bash #` / `bash #r42` (design 6). Admin runs: no cancel while they
+    // work (F6), the R1/R2 lines after a declined or failed elevation, and a
+    // 管理员再执行 on the finished bar (design 5).
+    Items resultPage(long long runId, const Settings& st, const Detection& det, const bool zh)
     {
         Items items;
         std::shared_ptr<RunState> run = runId == 0 ? m_runs.latest() : m_runs.find(runId);
@@ -565,15 +616,20 @@ private:
         }
         Item status(base + ":status", runStatusTitle(zh, *run), statusSubtitle);
         status.withIcon(runIcon(*run));
-        if (run->running)
+        if (run->running) {
             status.withActions({{"cancel", tr(zh, "取消", "Cancel"), "Enter"}})
                 .withData(Json::Object {{"kind", "cancelRun"}, {"runId", id}});
-        else
-            status.withActions({{"execute", tr(zh, "再执行一次", "Run again"), "Enter"},
-                                {"openTerminal", tr(zh, "在终端里执行", "Run in a terminal"), "Ctrl+Enter"}})
+        } else {
+            std::vector<Action> again {{"execute", tr(zh, "再执行一次", "Run again"), "Enter"}};
+            if (st.adminMode != "off" && adminCapable(programOfShell(det, run->shellName)))
+                again.push_back({"executeAdmin", tr(zh, "管理员再执行", "Run as admin again"),
+                                 "Ctrl+Shift+Enter"});
+            again.push_back({"openTerminal", tr(zh, "在终端里执行", "Run in a terminal"), "Ctrl+Enter"});
+            status.withActions(std::move(again))
                 .withData(Json::Object {{"kind", "rerun"},
                                         {"shell", run->shellName},
                                         {"command", run->command}});
+        }
         items.push_back(std::move(status));
 
         // Action rows come before the output so the user does not have to
@@ -676,6 +732,76 @@ private:
                 effect::setQuery(keywordOf(queryCommand) + " #r" + std::to_string(id))};
     }
 
+    // The elevated path (shell-admin-design.md 4): the same script, started
+    // through a UAC prompt over the system's cmd.exe. One at a time; bash,
+    // msys and wsl have no admin entry (R12).
+    Effects startAdminRun(const std::string& shell, const std::string& command,
+                          const Settings& st, const Detection& det, const bool zh)
+    {
+        if (command.empty())
+            return {effect::keep()};
+        if (st.adminMode == "off")
+            return {effect::keep(),
+                    effect::notify(tr(zh, "管理员执行已在设置里关闭",
+                                      "Admin execution is switched off in the settings"))};
+        const std::string workDir = st.workDir.empty() ? userHome() : st.workDir;
+        const ShellSpec spec = shellSpec(st, det, shell, workDir);
+        if (!spec.valid) {
+            notifyUser(tr(zh, "没有找到 shell：", "Shell not found: ") + shell);
+            return {effect::keep()};
+        }
+        if (!adminCapable(spec.program)) {
+            notifyUser(tr(zh, "这个 shell 不能以管理员运行（只有 cmd 和 PowerShell）",
+                          "This shell cannot run as administrator (cmd and PowerShell only)"));
+            return {effect::keep()};
+        }
+        // One UAC request at a time so the dialogs do not stack; the windows
+        // they open are independent and may coexist.
+        if (m_adminBusy.exchange(true)) {
+            notifyUser(tr(zh, "正在请求管理员权限，请稍候",
+                          "An admin permission request is already pending"));
+            return {effect::keep()};
+        }
+        const std::string runsDir = dataDir() + "\\runs";
+        const bool recordHistory = st.saveHistory;
+        // ShellExecuteExW blocks under the secure desktop: run it off the
+        // protocol thread so queries keep answering (the host restarts a
+        // plugin whose query times out). The window then lives on its own.
+        std::thread([this, st, det, shell, command, workDir, runsDir, zh, recordHistory]() {
+            const AdminWindowResult r = openAdminWindow(st, det, shell, command, runsDir, workDir);
+            if (r.started) {
+                notifyUser(tr(zh, "已在管理员窗口打开，跑完窗口会留着",
+                              "Opened in an admin window; it stays after the command"));
+                if (recordHistory && !command.empty()) {
+                    const std::lock_guard lock(m_stateMutex);
+                    // -1: the window owns the process, so its exit code is unknown here.
+                    m_history = historyMerged(m_history, {shell, command, epochSeconds(), 1, -1});
+                    saveHistory(dataDir(), m_history);
+                }
+            } else if (r.denied) {
+                notifyUser(tr(zh, "UAC 已拒绝，没有执行", "UAC declined; nothing ran"));
+            } else if (r.error != 0) {
+                notifyUser(tr(zh, "无法提权（错误 ", "Cannot elevate (error ")
+                           + std::to_string(r.error) + tr(zh, "）", ")"));
+            } else {
+                notifyUser(tr(zh, "打不开管理员窗口：", "Cannot open the admin window: ") + r.message);
+            }
+            m_adminBusy = false;
+        }).detach();
+        return {effect::keep()};
+    }
+
+    // The program a shell runs with (builtin detection or a custom shell);
+    // the input to adminCapable.
+    std::string programOfShell(const Detection& det, const std::string& name) const
+    {
+        const auto it = det.programs.find(name);
+        if (it != det.programs.end())
+            return it->second;
+        const std::optional<CustomShell> custom = customByName(det, name);
+        return custom ? custom->program : std::string();
+    }
+
     // From the run manager's worker threads.
     void runFinished(const RunState& s)
     {
@@ -685,9 +811,9 @@ private:
         // the text stays free of the command and the output.
         if (secs >= s.notifyAfterSec && !s.cancelled) {
             const std::string title = tr(zh, "完成 · 退出码 " + std::to_string(s.exitCode) + " · "
-                                                + formatSeconds(secs),
-                                          "Finished · exit " + std::to_string(s.exitCode) + " · "
-                                                + formatSeconds(secs));
+                                                   + formatSeconds(secs),
+                                         "Finished · exit " + std::to_string(s.exitCode) + " · "
+                                                   + formatSeconds(secs));
             toast(title, "", {effect::setQuery("> #r" + std::to_string(s.id))});
         }
         if (s.saveHistory && !s.fromClipboard && !s.command.empty()) {
@@ -703,6 +829,7 @@ private:
     std::vector<HistoryEntry> m_history;
     std::mutex m_stateMutex; // guards m_st / m_det / m_history
     RunManager m_runs;
+    std::atomic<bool> m_adminBusy {false}; // a UAC request is in flight
 };
 
 } // namespace
